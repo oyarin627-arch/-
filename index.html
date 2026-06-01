@@ -486,5 +486,69 @@ lucide-react/dist/esm/lucide-react.js:
 */
 
 </script>
+<!-- firestore-sync-bridge -->
+<!-- Firestore 同期ブリッジ: 元アプリのコードは未変更。タスクの保存(localStorage)を捕まえてクラウドと同期する -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+  import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAr93zoGtmc3IaIiLnalzb3QDvW1Wlg_9w",
+    authDomain: "task-app-c586e.firebaseapp.com",
+    projectId: "task-app-c586e",
+    storageBucket: "task-app-c586e.firebasestorage.app",
+    messagingSenderId: "350937473724",
+    appId: "1:350937473724:web:eb63cdd8a81950e133e6b9",
+    measurementId: "G-91NWYMMPZW"
+  };
+
+  // 元アプリが全タスクを保存しているブラウザ内のキー
+  const STORAGE_KEY = "taskapp-state-v1";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  // クラウド上の保存場所: コレクション "taskapp" の中の "shared" という1件の書類
+  const stateRef = doc(db, "taskapp", "shared");
+
+  // クラウド→手元 へ書き込んでいる間は、その更新をクラウドへ送り返さないための目印
+  let applyingRemote = false;
+
+  // 1) アプリがタスクを保存する瞬間を横取りして、その内容をクラウドへ送る
+  const origSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    origSetItem.call(this, key, value);
+    if (this === window.localStorage && key === STORAGE_KEY && !applyingRemote) {
+      setDoc(stateRef, { data: value, updatedAt: Date.now() })
+        .catch((e) => console.error("[sync] クラウドへの送信に失敗:", e));
+    }
+  };
+
+  // 2) クラウド側の変化を常に見張る → 変わっていたら手元に反映して画面を最新化
+  onSnapshot(
+    stateRef,
+    (snap) => {
+      if (!snap.exists()) {
+        // クラウドにまだ何も無ければ、いま手元にある内容で初期登録する
+        const current = window.localStorage.getItem(STORAGE_KEY);
+        if (current) {
+          setDoc(stateRef, { data: current, updatedAt: Date.now() })
+            .catch((e) => console.error("[sync] 初期登録に失敗:", e));
+        }
+        return;
+      }
+      const remote = snap.data().data;
+      const local = window.localStorage.getItem(STORAGE_KEY);
+      // 内容が手元と違うときだけ反映（自分が今送った変更では再読込しない）
+      if (typeof remote === "string" && remote !== local) {
+        applyingRemote = true;
+        origSetItem.call(window.localStorage, STORAGE_KEY, remote);
+        applyingRemote = false;
+        // 画面（アプリ内部の状態）を確実に作り直すため、一度だけ再読み込み
+        location.reload();
+      }
+    },
+    (e) => console.error("[sync] クラウドからの受信エラー:", e)
+  );
+</script>
 </body>
 </html>
