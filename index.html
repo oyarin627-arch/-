@@ -587,16 +587,70 @@ lucide-react/dist/esm/lucide-react.js:
     location.reload();
   }
 
+  // ---- 復元モード(?recover のときだけ表示。自動同期は止めて安全に控えから戻す) ----
+  const RECOVER=(new URLSearchParams(location.search)).has("recover")||/recover/.test(location.hash);
+  const fmtTime=(t)=>{try{return new Date(t).toLocaleString();}catch{return String(t);}};
+  const countTasks=(s)=>{try{const d=JSON.parse(s);return (d.projects||[]).reduce((a,p)=>a+((p.tasks||[]).length),0);}catch{return 0;}};
+  const countProjects=(s)=>{try{const d=JSON.parse(s);return (d.projects||[]).length;}catch{return 0;}};
+
+  function buildRecoveryUI(){
+    const wrap=document.createElement("div");
+    wrap.style.cssText="position:fixed;inset:0;z-index:100000;background:#fff;color:#111;overflow:auto;"+
+      "font:15px/1.6 -apple-system,system-ui,sans-serif;padding:20px;box-sizing:border-box;";
+    const esc=(s)=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    let backups=[]; try{backups=JSON.parse(localStorage.getItem(BACKUP_KEY)||"[]");}catch{}
+    const cur=localStorage.getItem(STORAGE_KEY);
+    let html="<h2 style='margin:0 0 8px'>🛟 復元モード</h2>";
+    html+="<p style='color:#555;margin:0 0 16px'>この端末に残っている控えから、タスクを元に戻せます。戻したい候補の「これを復元」を押すと、全端末へ反映されます。(このモードでは自動同期は止まっています)</p>";
+    html+="<div style='border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:12px'>";
+    html+="<b>いまこの端末の表示内容</b><br>プロジェクト "+countProjects(cur)+"件 / タスク "+countTasks(cur)+"件";
+    html+="<br><button data-cur='1' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#007aff;color:#fff'>この内容をクラウドへ復元</button></div>";
+    html+="<h3 style='margin:16px 0 8px'>端末内の控え（新しい順）</h3>";
+    if(!backups.length){
+      html+="<p style='color:#a00'>この端末には控えが見つかりませんでした。よく使っていた別の端末で、同じURLに <code>?recover</code> を付けて開いてみてください。</p>";
+    }else{
+      for(let i=backups.length-1;i>=0;i--){
+        const b=backups[i];
+        html+="<div style='border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:10px'>";
+        html+="<div style='color:#555;font-size:13px'>"+esc(fmtTime(b.t))+" ／ "+esc(b.label||"")+"</div>";
+        html+="プロジェクト "+countProjects(b.value)+"件 / タスク "+countTasks(b.value)+"件";
+        html+="<br><button data-idx='"+i+"' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#148a46;color:#fff'>これを復元</button></div>";
+      }
+    }
+    html+="<div style='margin-top:20px'><button data-close='1' style='padding:8px 12px;border:1px solid #ccc;border-radius:8px;background:#f2f2f2'>閉じる（通常画面へ）</button></div>";
+    wrap.innerHTML=html;
+    const baseUrl=location.origin+location.pathname;
+    function doRestore(value){
+      if(!value){alert("内容が空です。");return;}
+      if(!confirm("この内容（タスク"+countTasks(value)+"件）を復元し、全端末へ反映します。よろしいですか？"))return;
+      applyingRemote=true; origSetItem.call(localStorage,STORAGE_KEY,value); applyingRemote=false;
+      setRev(now());
+      setDoc(stateRef,{data:value,updatedAt:now()}).then(()=>{
+        alert("復元しました。通常画面に戻ります。");
+        location.href=baseUrl;
+      }).catch((e)=>{ alert("復元の保存に失敗しました: "+(e.code||e.message)); });
+    }
+    wrap.addEventListener("click",(ev)=>{
+      const t=ev.target;
+      if(t.dataset.close){ location.href=baseUrl; return; }
+      if(t.dataset.cur){ doRestore(cur); return; }
+      if(t.dataset.idx!=null){ const b=backups[Number(t.dataset.idx)]; doRestore(b&&b.value); return; }
+    });
+    const mount=()=>{(document.body||document.documentElement).appendChild(wrap);};
+    if(document.body)mount(); else window.addEventListener("DOMContentLoaded",mount);
+  }
+  if(RECOVER) buildRecoveryUI();
+
   // 1) アプリの保存を横取り → 準備完了後はクラウドへ送る
   Storage.prototype.setItem=function(key,value){
     origSetItem.call(this,key,value);
-    if(this===window.localStorage&&key===STORAGE_KEY&&ready&&!applyingRemote&&value!==lastPushed){
+    if(this===window.localStorage&&key===STORAGE_KEY&&ready&&!applyingRemote&&!RECOVER&&value!==lastPushed){
       pushToCloud(value);
     }
   };
 
-  // 2) クラウドの変化を購読 → 安全に解決
-  onSnapshot(stateRef,(snap)=>{
+  // 2) クラウドの変化を購読 → 安全に解決 (復元モード中は購読しない)
+  if(!RECOVER) onSnapshot(stateRef,(snap)=>{
     const local=window.localStorage.getItem(STORAGE_KEY);
     if(!snap.exists()){
       if(local)pushToCloud(local);
@@ -636,8 +690,8 @@ lucide-react/dist/esm/lucide-react.js:
     }
   },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("エラー(受信): "+(e.code||e.message),"rgba(190,40,40,.92)");});
 
-  // 3) 取りこぼし防止
-  setInterval(()=>{
+  // 3) 取りこぼし防止 (復元モード中は止める)
+  if(!RECOVER) setInterval(()=>{
     if(!ready)return;
     const cur=window.localStorage.getItem(STORAGE_KEY);
     if(cur&&cur!==lastPushed)pushToCloud(cur);
