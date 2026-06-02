@@ -487,9 +487,9 @@ lucide-react/dist/esm/lucide-react.js:
 
 </script>
 <!-- firestore-sync-bridge -->
-<!-- Firestore 同期ブリッジ(v3): 元アプリのコードは未変更。
-     安全方針: 上書き前に必ず端末内バックアップ / 未同期の端末では手元データを優先して守る /
-     既に同期済みなら新しい方を採用(last-write-wins) / 取りこぼし防止の定期チェック / 画面隅に状況表示 -->
+<!-- Firestore 同期ブリッジ(v4): 元アプリのコードは未変更。
+     肝: 手付かずの初期サンプル画面なら共有データを取り込む / 手を加えた本物データは守る /
+     上書き前に端末内バックアップ / 同期済み端末間は新しい方を採用 / 定期チェック / 画面隅に状況表示 -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
   import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
@@ -504,9 +504,9 @@ lucide-react/dist/esm/lucide-react.js:
     measurementId: "G-91NWYMMPZW"
   };
 
-  const STORAGE_KEY = "taskapp-state-v1";    // 元アプリが全タスクを保存しているキー
-  const REV_KEY     = "taskapp-sync-rev";    // この端末が最後に同期した時刻(自分で管理)
-  const BACKUP_KEY  = "taskapp-backups";     // 上書き前の控え(直近5件)
+  const STORAGE_KEY = "taskapp-state-v1";
+  const REV_KEY     = "taskapp-sync-rev";
+  const BACKUP_KEY  = "taskapp-backups";
 
   // ---- 画面隅の小さな同期ステータス表示 ----
   const badge=document.createElement("div");
@@ -528,7 +528,6 @@ lucide-react/dist/esm/lucide-react.js:
   const getRev=()=>Number(localStorage.getItem(REV_KEY)||0);
   const setRev=(t)=>{try{localStorage.setItem(REV_KEY,String(t));}catch{}};
 
-  // 上書きされて消える側のデータを端末内に退避(直近5件)
   function backup(label,value){
     if(!value)return;
     try{
@@ -539,11 +538,27 @@ lucide-react/dist/esm/lucide-react.js:
     }catch{}
   }
 
+  // 手付かずの初期サンプル画面かどうか(=本物のデータが無い)を判定
+  function isDefaultSample(s){
+    try{
+      const d=JSON.parse(s);
+      const p=d.projects||[];
+      if(p.length!==1) return false;
+      if(p[0].name!=="サンプル") return false;
+      const texts=(p[0].tasks||[]).map(t=>t&&t.text);
+      if(texts.length!==2||texts[0]!=="企画書をまとめる"||texts[1]!=="メール文を考える") return false;
+      const emptyArr=k=>Array.isArray(d[k])&&d[k].length===0;
+      if(!emptyArr("custom")||!emptyArr("recent")||!emptyArr("countdowns")||!emptyArr("hidden")) return false;
+      if((d.headline||"")!=="") return false;
+      return true;
+    }catch{ return false; }
+  }
+
   const app=initializeApp(firebaseConfig);
   const db=getFirestore(app);
   const stateRef=doc(db,"taskapp","shared");
 
-  let ready=false;            // 最初の照合が済むまで true にしない
+  let ready=false;
   let applyingRemote=false;
   let lastPushed=localStorage.getItem(STORAGE_KEY);
   const origSetItem=Storage.prototype.setItem;
@@ -557,12 +572,12 @@ lucide-react/dist/esm/lucide-react.js:
   }
 
   function adoptRemote(remote,remoteRev){
-    backup("overwritten-by-cloud",window.localStorage.getItem(STORAGE_KEY)); // 消える手元データを控える
+    backup("overwritten-by-cloud",window.localStorage.getItem(STORAGE_KEY));
     applyingRemote=true;
     origSetItem.call(window.localStorage,STORAGE_KEY,remote);
     applyingRemote=false;
     setRev(remoteRev||now());
-    setStatus("読み込み(別端末の更新)","rgba(20,140,70,.9)");
+    setStatus("読み込み(最新を取得)","rgba(20,140,70,.9)");
     location.reload();
   }
 
@@ -593,23 +608,26 @@ lucide-react/dist/esm/lucide-react.js:
       return;
     }
 
-    // 内容が食い違う場合
-    if(getRev()===0){
-      // この端末はまだ一度も同期していない → 手元のデータを守るため手元を優先して送る
-      backup("cloud-before-localwin",remote); // クラウド側も控えてから
+    // 内容が食い違う場合の安全な解決
+    if(isDefaultSample(local)){
+      // この端末は手付かずの初期サンプル → 共有データを取り込む(本物を壊さない)
+      adoptRemote(remote,remoteRev);
+    }else if(getRev()===0){
+      // 手を加えた本物データがまだ未同期 → 守ってクラウドへ送る
+      backup("cloud-before-localwin",remote);
       ready=true;
       pushToCloud(local);
     }else if(remoteRev>getRev()){
-      // 過去に同期済みで、クラウドの方が新しい → 取り込む(手元はバックアップ)
+      // 同期済みで、クラウドの方が新しい → 取り込む
       adoptRemote(remote,remoteRev);
     }else{
-      // 手元の方が新しい → 送る
+      // 同期済みで、手元の方が新しい → 送る
       ready=true;
       pushToCloud(local);
     }
   },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("エラー(受信): "+(e.code||e.message),"rgba(190,40,40,.92)");});
 
-  // 3) 取りこぼし防止: 数秒ごとに手元とクラウドの差をチェックして送る
+  // 3) 取りこぼし防止
   setInterval(()=>{
     if(!ready)return;
     const cur=window.localStorage.getItem(STORAGE_KEY);
