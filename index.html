@@ -489,7 +489,7 @@ lucide-react/dist/esm/lucide-react.js:
 <!-- firestore-sync-bridge -->
 <!-- Firestore 同期ブリッジ(v5): 元アプリのコードは未変更。
      安全弁: 本物のクラウドデータを「空/初期サンプル」で上書きしない / 手付かずの初期画面は共有データを取り込む /
-     上書き前に端末内バックアップ / 復元ボタン / 同期済み端末間は新しい方を採用 / 定期チェック / 状況表示 -->
+     上書き前に端末内バックアップ(保険) / 同期済み端末間は新しい方を採用 / 定期チェック / 状況表示 -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
   import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
@@ -520,13 +520,7 @@ lucide-react/dist/esm/lucide-react.js:
     clearTimeout(setStatus._t);
     if(/同期OK|読み込み|保存しました/.test(text)){setStatus._t=setTimeout(()=>{badge.style.opacity="0";},2500);}
   };
-  // ---- 復元ボタン ----
-  const restoreBtn=document.createElement("button");
-  restoreBtn.textContent="⟲ 復元";
-  restoreBtn.style.cssText="position:fixed;left:8px;bottom:40px;z-index:99999;font:12px/1 -apple-system,system-ui,sans-serif;"+
-    "padding:6px 10px;border-radius:14px;border:0;background:rgba(120,90,0,.92);color:#fff;"+
-    "box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:auto;";
-  const mountUI=()=>{const r=document.body||document.documentElement;r.appendChild(badge);r.appendChild(restoreBtn);};
+  const mountUI=()=>{(document.body||document.documentElement).appendChild(badge);};
   if(document.body)mountUI(); else window.addEventListener("DOMContentLoaded",mountUI);
   setStatus("接続中…","rgba(0,0,0,.72)");
 
@@ -559,7 +553,6 @@ lucide-react/dist/esm/lucide-react.js:
     }catch{ return false; }
   }
   const isEmptyOrDefault=(s)=> !s || isDefaultSample(s);
-  const taskCount=(s)=>{try{const d=JSON.parse(s);return (d.projects||[]).reduce((a,p)=>a+((p.tasks||[]).length),0);}catch{return 0;}};
 
   const app=initializeApp(firebaseConfig);
   const db=getFirestore(app);
@@ -593,19 +586,6 @@ lucide-react/dist/esm/lucide-react.js:
     setStatus("読み込み(最新を取得)","rgba(20,140,70,.9)");
     location.reload();
   }
-
-  // 復元ボタン: 端末内の控えから本物データを取り戻す
-  restoreBtn.addEventListener("click",()=>{
-    let arr=[]; try{arr=JSON.parse(localStorage.getItem(BACKUP_KEY)||"[]");}catch{}
-    const real=arr.filter(b=>b&&b.value&&!isEmptyOrDefault(b.value));
-    if(!real.length){ alert("この端末には復元できる控えが見つかりませんでした。"); return; }
-    const b=real[real.length-1];
-    const when=new Date(b.t).toLocaleString();
-    if(!confirm(when+" の控え（タスク約"+taskCount(b.value)+"件）を復元し、全端末へ反映します。よろしいですか？")) return;
-    applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,b.value); applyingRemote=false;
-    cloudHasRealData=true; lastPushed=null;
-    pushToCloud(b.value,true).then(()=>location.reload());
-  });
 
   // 1) アプリの保存を横取り → 準備完了後はクラウドへ送る
   Storage.prototype.setItem=function(key,value){
