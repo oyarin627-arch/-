@@ -665,15 +665,34 @@ lucide-react/dist/esm/lucide-react.js:
       .catch((e)=>{console.error("[sync] 送信失敗:",e);setStatus("エラー(保存): "+(e.code||e.message),"rgba(190,40,40,.92)");});
   }
 
+  // 入力中(テキスト入力やメモ編集中)かどうか
+  function isEditing(){
+    const a=document.activeElement; if(!a) return false;
+    const tag=(a.tagName||"").toLowerCase();
+    return tag==="input"||tag==="textarea"||a.isContentEditable===true;
+  }
+  // 変更を「入力を邪魔せず・スクロール位置を保って」反映する(他デバイスの更新用)
+  let applyTarget=null, applyTimer=null;
+  function applyWhenIdle(value){
+    applyTarget=value;
+    const run=()=>{
+      if(isEditing()){ setStatus("新しい変更あり(入力後に反映)","rgba(120,90,0,.92)"); return; }
+      if(applyTimer){ clearInterval(applyTimer); applyTimer=null; }
+      const v=applyTarget; applyTarget=null;
+      try{ sessionStorage.setItem("taskapp-scroll",String(window.scrollY||0)); }catch{}
+      backup("before-apply",window.localStorage.getItem(STORAGE_KEY));
+      applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,v); applyingRemote=false;
+      location.reload();
+    };
+    if(isEditing()){ setStatus("新しい変更あり(入力後に反映)","rgba(120,90,0,.92)"); if(!applyTimer) applyTimer=setInterval(run,700); }
+    else run();
+  }
+
   function adoptRemote(remote,remoteRev){
-    backup("overwritten-by-cloud",window.localStorage.getItem(STORAGE_KEY));
-    applyingRemote=true;
-    origSetItem.call(window.localStorage,STORAGE_KEY,remote);
-    applyingRemote=false;
     setBase(remote);
     setRev(remoteRev||now());
     setStatus("読み込み(最新を取得)","rgba(20,140,70,.9)");
-    location.reload();
+    applyWhenIdle(remote);
   }
 
   // ---- 復元モード(?recover のときだけ表示。自動同期は止めて安全に控えから戻す) ----
@@ -778,10 +797,8 @@ lucide-react/dist/esm/lucide-react.js:
       const needLocal=mergedStr!==local;
       const finish=()=>{
         if(needLocal){
-          backup("before-merge",local);
-          applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,mergedStr); applyingRemote=false;
           setStatus("マージしました","rgba(20,140,70,.9)");
-          location.reload();
+          applyWhenIdle(mergedStr);   // 入力を邪魔せず・スクロール位置を保って反映
         }else{ ready=true; setStatus("同期OK","rgba(20,140,70,.9)"); }
       };
       if(mergedStr!==remote){
@@ -806,6 +823,18 @@ lucide-react/dist/esm/lucide-react.js:
   if("serviceWorker" in navigator){
     window.addEventListener("load",()=>{ navigator.serviceWorker.register("sw.js").catch((e)=>console.warn("[sw] 登録失敗:",e)); });
   }
+
+  // 5) オンライン復帰時に、未送信のオフライン変更を即座にクラウドへ反映
+  window.addEventListener("online",()=>{
+    if(!ready||RECOVER)return;
+    const cur=window.localStorage.getItem(STORAGE_KEY);
+    if(cur&&cur!==lastPushed)pushToCloud(cur);
+  });
+
+  // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
+  window.addEventListener("load",()=>{
+    try{ const y=sessionStorage.getItem("taskapp-scroll"); if(y!=null){ window.scrollTo(0,Number(y)); sessionStorage.removeItem("taskapp-scroll"); } }catch{}
+  });
 </script>
 </body>
 </html>
