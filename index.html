@@ -487,8 +487,9 @@ lucide-react/dist/esm/lucide-react.js:
 
 </script>
 <!-- firestore-sync-bridge -->
-<!-- Firestore 同期ブリッジ(v2): 元アプリのコードは未変更。保存(localStorage)を捕まえてクラウドと双方向同期する。
-     方針: 開いたときは「より新しい方」を採用 / 端末での変更はクラウドへ送る / 取りこぼし防止に定期チェック / 画面隅に状況表示 -->
+<!-- Firestore 同期ブリッジ(v3): 元アプリのコードは未変更。
+     安全方針: 上書き前に必ず端末内バックアップ / 未同期の端末では手元データを優先して守る /
+     既に同期済みなら新しい方を採用(last-write-wins) / 取りこぼし防止の定期チェック / 画面隅に状況表示 -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
   import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
@@ -503,109 +504,117 @@ lucide-react/dist/esm/lucide-react.js:
     measurementId: "G-91NWYMMPZW"
   };
 
-  const STORAGE_KEY = "taskapp-state-v1";   // 元アプリが全タスクを保存しているキー
-  const REV_KEY = "taskapp-sync-rev";       // この端末が最後に同期した時刻(自分で管理)
+  const STORAGE_KEY = "taskapp-state-v1";    // 元アプリが全タスクを保存しているキー
+  const REV_KEY     = "taskapp-sync-rev";    // この端末が最後に同期した時刻(自分で管理)
+  const BACKUP_KEY  = "taskapp-backups";     // 上書き前の控え(直近5件)
 
   // ---- 画面隅の小さな同期ステータス表示 ----
-  const badge = document.createElement("div");
-  badge.style.cssText = "position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.4 -apple-system,system-ui,sans-serif;" +
-    "padding:6px 10px;border-radius:14px;background:rgba(0,0,0,.72);color:#fff;max-width:80vw;" +
+  const badge=document.createElement("div");
+  badge.style.cssText="position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.4 -apple-system,system-ui,sans-serif;"+
+    "padding:6px 10px;border-radius:14px;background:rgba(0,0,0,.72);color:#fff;max-width:80vw;"+
     "box-shadow:0 2px 8px rgba(0,0,0,.25);transition:opacity .4s;opacity:.95;pointer-events:none;";
-  const setStatus = (text, color) => {
-    badge.textContent = "☁️ " + text;
-    if (color) badge.style.background = color;
-    badge.style.opacity = ".95";
+  const setStatus=(text,color)=>{
+    badge.textContent="☁️ "+text;
+    if(color)badge.style.background=color;
+    badge.style.opacity=".95";
     clearTimeout(setStatus._t);
-    if (/同期OK|読み込み|保存しました/.test(text)) {
-      setStatus._t = setTimeout(() => { badge.style.opacity = "0"; }, 2500);
-    }
+    if(/同期OK|読み込み|保存しました/.test(text)){setStatus._t=setTimeout(()=>{badge.style.opacity="0";},2500);}
   };
-  const showBadge = () => { (document.body || document.documentElement).appendChild(badge); };
-  if (document.body) showBadge(); else window.addEventListener("DOMContentLoaded", showBadge);
-  setStatus("接続中…", "rgba(0,0,0,.72)");
+  const showBadge=()=>{(document.body||document.documentElement).appendChild(badge);};
+  if(document.body)showBadge(); else window.addEventListener("DOMContentLoaded",showBadge);
+  setStatus("接続中…","rgba(0,0,0,.72)");
 
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
-  const stateRef = doc(db, "taskapp", "shared");
+  const now=()=>Date.now();
+  const getRev=()=>Number(localStorage.getItem(REV_KEY)||0);
+  const setRev=(t)=>{try{localStorage.setItem(REV_KEY,String(t));}catch{}};
 
-  const now = () => Date.now();
-  const getRev = () => Number(localStorage.getItem(REV_KEY) || 0);
-  const setRev = (t) => { try { localStorage.setItem(REV_KEY, String(t)); } catch {} };
-
-  let ready = false;        // 最初の照合が済むまで true にしない
-  let applyingRemote = false;
-  let lastPushed = localStorage.getItem(STORAGE_KEY);
-
-  const origSetItem = Storage.prototype.setItem;
-
-  function pushToCloud(value) {
-    const t = now();
-    setStatus("保存中…", "rgba(0,90,200,.85)");
-    return setDoc(stateRef, { data: value, updatedAt: t })
-      .then(() => { lastPushed = value; setRev(t); setStatus("保存しました", "rgba(20,140,70,.9)"); })
-      .catch((e) => { console.error("[sync] 送信失敗:", e); setStatus("エラー(保存): " + (e.code || e.message), "rgba(190,40,40,.92)"); });
+  // 上書きされて消える側のデータを端末内に退避(直近5件)
+  function backup(label,value){
+    if(!value)return;
+    try{
+      const arr=JSON.parse(localStorage.getItem(BACKUP_KEY)||"[]");
+      arr.push({t:now(),label,value});
+      while(arr.length>5)arr.shift();
+      localStorage.setItem(BACKUP_KEY,JSON.stringify(arr));
+    }catch{}
   }
 
-  function adoptRemote(remote, remoteRev) {
-    applyingRemote = true;
-    origSetItem.call(localStorage, STORAGE_KEY, remote);
-    applyingRemote = false;
-    setRev(remoteRev || now());
-    setStatus("読み込み(別端末の更新)", "rgba(20,140,70,.9)");
-    location.reload();   // アプリ内部の状態を作り直して確実に表示
+  const app=initializeApp(firebaseConfig);
+  const db=getFirestore(app);
+  const stateRef=doc(db,"taskapp","shared");
+
+  let ready=false;            // 最初の照合が済むまで true にしない
+  let applyingRemote=false;
+  let lastPushed=localStorage.getItem(STORAGE_KEY);
+  const origSetItem=Storage.prototype.setItem;
+
+  function pushToCloud(value){
+    const t=now();
+    setStatus("保存中…","rgba(0,90,200,.85)");
+    return setDoc(stateRef,{data:value,updatedAt:t})
+      .then(()=>{lastPushed=value;setRev(t);setStatus("保存しました","rgba(20,140,70,.9)");})
+      .catch((e)=>{console.error("[sync] 送信失敗:",e);setStatus("エラー(保存): "+(e.code||e.message),"rgba(190,40,40,.92)");});
+  }
+
+  function adoptRemote(remote,remoteRev){
+    backup("overwritten-by-cloud",window.localStorage.getItem(STORAGE_KEY)); // 消える手元データを控える
+    applyingRemote=true;
+    origSetItem.call(window.localStorage,STORAGE_KEY,remote);
+    applyingRemote=false;
+    setRev(remoteRev||now());
+    setStatus("読み込み(別端末の更新)","rgba(20,140,70,.9)");
+    location.reload();
   }
 
   // 1) アプリの保存を横取り → 準備完了後はクラウドへ送る
-  Storage.prototype.setItem = function (key, value) {
-    origSetItem.call(this, key, value);
-    if (this === window.localStorage && key === STORAGE_KEY && ready && !applyingRemote && value !== lastPushed) {
+  Storage.prototype.setItem=function(key,value){
+    origSetItem.call(this,key,value);
+    if(this===window.localStorage&&key===STORAGE_KEY&&ready&&!applyingRemote&&value!==lastPushed){
       pushToCloud(value);
     }
   };
 
-  // 2) クラウドの変化を購読 → 「より新しい方」を採用
-  onSnapshot(
-    stateRef,
-    (snap) => {
-      const local = window.localStorage.getItem(STORAGE_KEY);
-      if (!snap.exists()) {
-        // クラウドが空 → 手元の内容で初期登録
-        if (local) { pushToCloud(local); }
-        ready = true;
-        return;
-      }
-      const remote = snap.data().data;
-      const remoteRev = Number(snap.data().updatedAt || 0);
+  // 2) クラウドの変化を購読 → 安全に解決
+  onSnapshot(stateRef,(snap)=>{
+    const local=window.localStorage.getItem(STORAGE_KEY);
+    if(!snap.exists()){
+      if(local)pushToCloud(local);
+      ready=true;
+      return;
+    }
+    const remote=snap.data().data;
+    const remoteRev=Number(snap.data().updatedAt||0);
+    if(typeof remote!=="string"){ready=true;return;}
 
-      if (typeof remote !== "string") { ready = true; return; }
+    if(remote===local){
+      lastPushed=remote;
+      setRev(Math.max(getRev(),remoteRev));
+      if(!ready){ready=true;setStatus("同期OK","rgba(20,140,70,.9)");}
+      return;
+    }
 
-      if (remote === local) {
-        // 同じ → 同期済みとして記録
-        lastPushed = remote;
-        setRev(Math.max(getRev(), remoteRev));
-        if (!ready) { ready = true; setStatus("同期OK", "rgba(20,140,70,.9)"); }
-        return;
-      }
-
-      // 内容が違う → 新しい方を採用(last-write-wins)
-      if (remoteRev > getRev()) {
-        // クラウドの方が新しい → 取り込む
-        adoptRemote(remote, remoteRev);   // ここで reload
-      } else {
-        // 手元の方が新しい(未送信の変更がある) → クラウドへ送る
-        ready = true;
-        pushToCloud(local);
-      }
-    },
-    (e) => { console.error("[sync] 受信エラー:", e); setStatus("エラー(受信): " + (e.code || e.message), "rgba(190,40,40,.92)"); }
-  );
+    // 内容が食い違う場合
+    if(getRev()===0){
+      // この端末はまだ一度も同期していない → 手元のデータを守るため手元を優先して送る
+      backup("cloud-before-localwin",remote); // クラウド側も控えてから
+      ready=true;
+      pushToCloud(local);
+    }else if(remoteRev>getRev()){
+      // 過去に同期済みで、クラウドの方が新しい → 取り込む(手元はバックアップ)
+      adoptRemote(remote,remoteRev);
+    }else{
+      // 手元の方が新しい → 送る
+      ready=true;
+      pushToCloud(local);
+    }
+  },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("エラー(受信): "+(e.code||e.message),"rgba(190,40,40,.92)");});
 
   // 3) 取りこぼし防止: 数秒ごとに手元とクラウドの差をチェックして送る
-  setInterval(() => {
-    if (!ready) return;
-    const cur = window.localStorage.getItem(STORAGE_KEY);
-    if (cur && cur !== lastPushed) pushToCloud(cur);
-  }, 4000);
+  setInterval(()=>{
+    if(!ready)return;
+    const cur=window.localStorage.getItem(STORAGE_KEY);
+    if(cur&&cur!==lastPushed)pushToCloud(cur);
+  },4000);
 </script>
 </body>
 </html>
