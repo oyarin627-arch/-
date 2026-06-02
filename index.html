@@ -487,9 +487,9 @@ lucide-react/dist/esm/lucide-react.js:
 
 </script>
 <!-- firestore-sync-bridge -->
-<!-- Firestore 同期ブリッジ(v4): 元アプリのコードは未変更。
-     肝: 手付かずの初期サンプル画面なら共有データを取り込む / 手を加えた本物データは守る /
-     上書き前に端末内バックアップ / 同期済み端末間は新しい方を採用 / 定期チェック / 画面隅に状況表示 -->
+<!-- Firestore 同期ブリッジ(v5): 元アプリのコードは未変更。
+     安全弁: 本物のクラウドデータを「空/初期サンプル」で上書きしない / 手付かずの初期画面は共有データを取り込む /
+     上書き前に端末内バックアップ / 復元ボタン / 同期済み端末間は新しい方を採用 / 定期チェック / 状況表示 -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
   import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
@@ -508,7 +508,7 @@ lucide-react/dist/esm/lucide-react.js:
   const REV_KEY     = "taskapp-sync-rev";
   const BACKUP_KEY  = "taskapp-backups";
 
-  // ---- 画面隅の小さな同期ステータス表示 ----
+  // ---- 同期ステータス表示 ----
   const badge=document.createElement("div");
   badge.style.cssText="position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.4 -apple-system,system-ui,sans-serif;"+
     "padding:6px 10px;border-radius:14px;background:rgba(0,0,0,.72);color:#fff;max-width:80vw;"+
@@ -520,8 +520,14 @@ lucide-react/dist/esm/lucide-react.js:
     clearTimeout(setStatus._t);
     if(/同期OK|読み込み|保存しました/.test(text)){setStatus._t=setTimeout(()=>{badge.style.opacity="0";},2500);}
   };
-  const showBadge=()=>{(document.body||document.documentElement).appendChild(badge);};
-  if(document.body)showBadge(); else window.addEventListener("DOMContentLoaded",showBadge);
+  // ---- 復元ボタン ----
+  const restoreBtn=document.createElement("button");
+  restoreBtn.textContent="⟲ 復元";
+  restoreBtn.style.cssText="position:fixed;left:8px;bottom:40px;z-index:99999;font:12px/1 -apple-system,system-ui,sans-serif;"+
+    "padding:6px 10px;border-radius:14px;border:0;background:rgba(120,90,0,.92);color:#fff;"+
+    "box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:auto;";
+  const mountUI=()=>{const r=document.body||document.documentElement;r.appendChild(badge);r.appendChild(restoreBtn);};
+  if(document.body)mountUI(); else window.addEventListener("DOMContentLoaded",mountUI);
   setStatus("接続中…","rgba(0,0,0,.72)");
 
   const now=()=>Date.now();
@@ -533,12 +539,11 @@ lucide-react/dist/esm/lucide-react.js:
     try{
       const arr=JSON.parse(localStorage.getItem(BACKUP_KEY)||"[]");
       arr.push({t:now(),label,value});
-      while(arr.length>5)arr.shift();
+      while(arr.length>8)arr.shift();
       localStorage.setItem(BACKUP_KEY,JSON.stringify(arr));
     }catch{}
   }
 
-  // 手付かずの初期サンプル画面かどうか(=本物のデータが無い)を判定
   function isDefaultSample(s){
     try{
       const d=JSON.parse(s);
@@ -553,6 +558,8 @@ lucide-react/dist/esm/lucide-react.js:
       return true;
     }catch{ return false; }
   }
+  const isEmptyOrDefault=(s)=> !s || isDefaultSample(s);
+  const taskCount=(s)=>{try{const d=JSON.parse(s);return (d.projects||[]).reduce((a,p)=>a+((p.tasks||[]).length),0);}catch{return 0;}};
 
   const app=initializeApp(firebaseConfig);
   const db=getFirestore(app);
@@ -560,10 +567,16 @@ lucide-react/dist/esm/lucide-react.js:
 
   let ready=false;
   let applyingRemote=false;
+  let cloudHasRealData=false;          // 一度でも本物のクラウドデータを見たら true
   let lastPushed=localStorage.getItem(STORAGE_KEY);
   const origSetItem=Storage.prototype.setItem;
 
-  function pushToCloud(value){
+  function pushToCloud(value,force){
+    // 安全弁: 本物のクラウドデータを、空/初期サンプルで上書きしない
+    if(!force && cloudHasRealData && isEmptyOrDefault(value)){
+      setStatus("初期データ保護のため送信中止","rgba(150,110,0,.92)");
+      return Promise.resolve();
+    }
     const t=now();
     setStatus("保存中…","rgba(0,90,200,.85)");
     return setDoc(stateRef,{data:value,updatedAt:t})
@@ -580,6 +593,19 @@ lucide-react/dist/esm/lucide-react.js:
     setStatus("読み込み(最新を取得)","rgba(20,140,70,.9)");
     location.reload();
   }
+
+  // 復元ボタン: 端末内の控えから本物データを取り戻す
+  restoreBtn.addEventListener("click",()=>{
+    let arr=[]; try{arr=JSON.parse(localStorage.getItem(BACKUP_KEY)||"[]");}catch{}
+    const real=arr.filter(b=>b&&b.value&&!isEmptyOrDefault(b.value));
+    if(!real.length){ alert("この端末には復元できる控えが見つかりませんでした。"); return; }
+    const b=real[real.length-1];
+    const when=new Date(b.t).toLocaleString();
+    if(!confirm(when+" の控え（タスク約"+taskCount(b.value)+"件）を復元し、全端末へ反映します。よろしいですか？")) return;
+    applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,b.value); applyingRemote=false;
+    cloudHasRealData=true; lastPushed=null;
+    pushToCloud(b.value,true).then(()=>location.reload());
+  });
 
   // 1) アプリの保存を横取り → 準備完了後はクラウドへ送る
   Storage.prototype.setItem=function(key,value){
@@ -600,6 +626,7 @@ lucide-react/dist/esm/lucide-react.js:
     const remote=snap.data().data;
     const remoteRev=Number(snap.data().updatedAt||0);
     if(typeof remote!=="string"){ready=true;return;}
+    if(!isEmptyOrDefault(remote)) cloudHasRealData=true;
 
     if(remote===local){
       lastPushed=remote;
@@ -610,7 +637,7 @@ lucide-react/dist/esm/lucide-react.js:
 
     // 内容が食い違う場合の安全な解決
     if(isDefaultSample(local)){
-      // この端末は手付かずの初期サンプル → 共有データを取り込む(本物を壊さない)
+      // 手付かずの初期サンプル → 共有データを取り込む(本物を壊さない)
       adoptRemote(remote,remoteRev);
     }else if(getRev()===0){
       // 手を加えた本物データがまだ未同期 → 守ってクラウドへ送る
@@ -618,10 +645,8 @@ lucide-react/dist/esm/lucide-react.js:
       ready=true;
       pushToCloud(local);
     }else if(remoteRev>getRev()){
-      // 同期済みで、クラウドの方が新しい → 取り込む
       adoptRemote(remote,remoteRev);
     }else{
-      // 同期済みで、手元の方が新しい → 送る
       ready=true;
       pushToCloud(local);
     }
