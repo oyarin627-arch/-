@@ -616,7 +616,11 @@ lucide-react/dist/esm/lucide-react.js:
     }
 
     // 内容が食い違う場合の安全な解決
-    if(isDefaultSample(local)){
+    if(isEmptyOrDefault(remote) && !isEmptyOrDefault(local)){
+      // クラウドが空/初期化 & 手元は本物 → 手元でクラウドを回復(自己修復)
+      ready=true;
+      pushToCloud(local);
+    }else if(isDefaultSample(local)){
       // 手付かずの初期サンプル → 共有データを取り込む(本物を壊さない)
       adoptRemote(remote,remoteRev);
     }else if(getRev()===0){
@@ -638,6 +642,11 @@ lucide-react/dist/esm/lucide-react.js:
     const cur=window.localStorage.getItem(STORAGE_KEY);
     if(cur&&cur!==lastPushed)pushToCloud(cur);
   },4000);
+
+  // 4) サービスワーカー登録: オンライン時は常に最新版を読み込む(古いキャッシュで初期化される問題を防ぐ)
+  if("serviceWorker" in navigator){
+    window.addEventListener("load",()=>{ navigator.serviceWorker.register("sw.js").catch((e)=>console.warn("[sw] 登録失敗:",e)); });
+  }
 </script>
 </body>
 </html>
