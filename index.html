@@ -507,6 +507,7 @@ lucide-react/dist/esm/lucide-react.js:
   const STORAGE_KEY = "taskapp-state-v1";
   const REV_KEY     = "taskapp-sync-rev";
   const BACKUP_KEY  = "taskapp-backups";
+  const BASE_KEY    = "taskapp-base";    // 前回同期した共通の土台(3-wayマージの基準)
 
   // ---- 同期ステータス表示 ----
   const badge=document.createElement("div");
@@ -527,6 +528,93 @@ lucide-react/dist/esm/lucide-react.js:
   const now=()=>Date.now();
   const getRev=()=>Number(localStorage.getItem(REV_KEY)||0);
   const setRev=(t)=>{try{localStorage.setItem(REV_KEY,String(t));}catch{}};
+  const setBase=(s)=>{try{ if(typeof s==="string") localStorage.setItem(BASE_KEY,s);}catch{}};
+  const getBaseObj=()=>{ try{ return JSON.parse(localStorage.getItem(BASE_KEY)||"null"); }catch{ return null; } };
+
+  // ---- 3-wayマージ (前回同期した土台を基準に、両側の差分を合体) ----
+  function stable(v){
+    if(v===null||typeof v!=="object") return JSON.stringify(v)||"null";
+    if(Array.isArray(v)) return "["+v.map(stable).join(",")+"]";
+    return "{"+Object.keys(v).sort().map(k=>JSON.stringify(k)+":"+stable(v[k])).join(",")+"}";
+  }
+  const eq=(a,b)=>stable(a)===stable(b);
+  function hsh(s){ let h=0; for(let i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))>>>0;} return h.toString(36); }
+  function pick3(b,l,r){ if(eq(l,r))return l; if(eq(l,b))return r; if(eq(r,b))return l; return r; } // 競合はクラウド側(remote)優先
+  function indexById(arr){ const m={}; (arr||[]).forEach(it=>{ if(it&&it.id!=null) m[String(it.id)]=it; }); return m; }
+  function orderedIds(){ const seen={},out=[]; for(const arr of arguments){ (arr||[]).forEach(it=>{ if(it&&it.id!=null){ const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);} } }); } return out; }
+
+  // タスク配列のマージ: 競合は両方残す(複製)、削除vs編集は編集優先
+  function mergeTasks(bArr,lArr,rArr){
+    const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr);
+    const out=[];
+    orderedIds(bArr,lArr,rArr).forEach(id=>{
+      const b=B[id],l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
+      if(inL&&inR){
+        if(eq(l,r)) out.push(r);
+        else if(inB&&eq(l,b)) out.push(r);          // 遠隔だけ変更
+        else if(inB&&eq(r,b)) out.push(l);          // 手元だけ変更
+        else { // 競合 → 両方残す(決定論的に複製)
+          const cl=stable(l),cr=stable(r);
+          const first = cl<cr ? l : r, second = cl<cr ? r : l;
+          out.push(Object.assign({},first,{id:id}));
+          out.push(Object.assign({},second,{id:id+"~d"+hsh(stable(second))}));
+        }
+      } else if(inL&&!inR){
+        if(inB&&eq(l,b)){/* 遠隔で削除・手元未変更 → 消す */} else out.push(l); // 追加 or 編集vs削除 → 残す
+      } else if(inR&&!inL){
+        if(inB&&eq(r,b)){/* 手元で削除・遠隔未変更 → 消す */} else out.push(r);
+      }
+    });
+    return out;
+  }
+
+  // プロジェクト配列のマージ: 同IDはフィールドとタスクを合体(プロジェクト自体は複製しない)
+  function mergeProjects(bArr,lArr,rArr){
+    const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr);
+    const out=[];
+    orderedIds(bArr,lArr,rArr).forEach(id=>{
+      const b=B[id]||null,l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
+      if(inL&&inR){
+        const merged=Object.assign({},r);
+        ["name","emoji","color","notes"].forEach(k=>{ merged[k]=pick3(b?b[k]:undefined,l[k],r[k]); });
+        merged.tasks=mergeTasks(b?b.tasks:[], l.tasks||[], r.tasks||[]);
+        out.push(merged);
+      } else if(inL&&!inR){
+        if(inB&&eq(l,b)){/* 遠隔で削除・手元未変更 → 消す */} else out.push(l);
+      } else if(inR&&!inL){
+        if(inB&&eq(r,b)){/* 手元で削除・遠隔未変更 → 消す */} else out.push(r);
+      }
+    });
+    return out;
+  }
+
+  // id付き配列(なければ内容で和集合)の汎用マージ: 競合はクラウド優先
+  function mergeArr(b,l,r){
+    if(eq(l,r))return l; if(eq(l,b))return r; if(eq(r,b))return l;
+    const hasId=(a)=>Array.isArray(a)&&a.length>0&&a.every(x=>x&&typeof x==="object"&&x.id!=null);
+    if(hasId(l)||hasId(r)||hasId(b)){
+      const B=indexById(b),L=indexById(l),R=indexById(r),out=[];
+      orderedIds(b,l,r).forEach(id=>{
+        const bb=B[id],ll=L[id],rr=R[id],inB=id in B,inL=id in L,inR=id in R;
+        if(inL&&inR) out.push(pick3(bb,ll,rr));
+        else if(inL&&!inR){ if(!(inB&&eq(ll,bb))) out.push(ll); }
+        else if(inR&&!inL){ if(!(inB&&eq(rr,bb))) out.push(rr); }
+      });
+      return out;
+    }
+    const out=[],seen={};
+    (l||[]).concat(r||[]).forEach(x=>{ const k=stable(x); if(!seen[k]){seen[k]=1;out.push(x);} });
+    return out;
+  }
+
+  function mergeState(base,local,remote){
+    const b=base||{},l=local||{},r=remote||{};
+    const out=Object.assign({},r);
+    out.projects=mergeProjects(b.projects||[],l.projects||[],r.projects||[]);
+    ["custom","recent","countdowns","hidden"].forEach(k=>{ out[k]=mergeArr(b[k]||[],l[k]||[],r[k]||[]); });
+    out.headline=pick3(b.headline,l.headline,r.headline);
+    return out;
+  }
 
   function backup(label,value){
     if(!value)return;
@@ -582,6 +670,7 @@ lucide-react/dist/esm/lucide-react.js:
     applyingRemote=true;
     origSetItem.call(window.localStorage,STORAGE_KEY,remote);
     applyingRemote=false;
+    setBase(remote);
     setRev(remoteRev||now());
     setStatus("読み込み(最新を取得)","rgba(20,140,70,.9)");
     location.reload();
@@ -664,29 +753,45 @@ lucide-react/dist/esm/lucide-react.js:
 
     if(remote===local){
       lastPushed=remote;
+      setBase(remote);
       setRev(Math.max(getRev(),remoteRev));
       if(!ready){ready=true;setStatus("同期OK","rgba(20,140,70,.9)");}
       return;
     }
 
-    // 内容が食い違う場合の安全な解決
+    // 手付かずの初期サンプル → 共有データを取り込む(サンプルをクラウドへ混ぜない)
+    if(isDefaultSample(local)){
+      adoptRemote(remote,remoteRev);
+      return;
+    }
+    // クラウドが空/初期化 & 手元は本物 → 手元でクラウドを回復(自己修復)
     if(isEmptyOrDefault(remote) && !isEmptyOrDefault(local)){
-      // クラウドが空/初期化 & 手元は本物 → 手元でクラウドを回復(自己修復)
-      ready=true;
-      pushToCloud(local);
-    }else if(isDefaultSample(local)){
-      // 手付かずの初期サンプル → 共有データを取り込む(本物を壊さない)
-      adoptRemote(remote,remoteRev);
-    }else if(getRev()===0){
-      // 手を加えた本物データがまだ未同期 → 守ってクラウドへ送る
-      backup("cloud-before-localwin",remote);
-      ready=true;
-      pushToCloud(local);
-    }else if(remoteRev>getRev()){
-      adoptRemote(remote,remoteRev);
-    }else{
-      ready=true;
-      pushToCloud(local);
+      setBase(local); ready=true; pushToCloud(local);
+      return;
+    }
+
+    // 両方に本物データ → 3-wayマージで合体(両方の追加・編集を残す)
+    try{
+      const merged=mergeState(getBaseObj(), JSON.parse(local), JSON.parse(remote));
+      const mergedStr=JSON.stringify(merged);
+      setBase(mergedStr); setRev(now()); lastPushed=mergedStr;
+      const needLocal=mergedStr!==local;
+      const finish=()=>{
+        if(needLocal){
+          backup("before-merge",local);
+          applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,mergedStr); applyingRemote=false;
+          setStatus("マージしました","rgba(20,140,70,.9)");
+          location.reload();
+        }else{ ready=true; setStatus("同期OK","rgba(20,140,70,.9)"); }
+      };
+      if(mergedStr!==remote){
+        setStatus("マージ中…","rgba(0,90,200,.85)");
+        setDoc(stateRef,{data:mergedStr,updatedAt:now()}).then(finish)
+          .catch((e)=>{console.error("[sync] マージ送信失敗:",e);setStatus("エラー(マージ): "+(e.code||e.message),"rgba(190,40,40,.92)");});
+      }else{ finish(); }
+    }catch(e){
+      console.error("[sync] マージ失敗、フォールバック:",e);
+      if(remoteRev>getRev()) adoptRemote(remote,remoteRev); else { ready=true; pushToCloud(local); }
     }
   },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("エラー(受信): "+(e.code||e.message),"rgba(190,40,40,.92)");});
 
