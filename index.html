@@ -544,10 +544,18 @@ lucide-react/dist/esm/lucide-react.js:
   function orderedIds(){ const seen={},out=[]; for(const arr of arguments){ (arr||[]).forEach(it=>{ if(it&&it.id!=null){ const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);} } }); } return out; }
 
   // タスク配列のマージ: 競合は両方残す(複製)、削除vs編集は編集優先
+  // 出力順を「クラウド(remote)基準 → 手元だけの追加を末尾」に統一
+  // → どの端末で計算しても同じ並びに収束し、一度揃えば「同じ」と判定されて送信が止まる(ループ防止)
+  function mergeOrderIds(lArr,rArr){
+    const out=[],seen={};
+    (rArr||[]).forEach(it=>{ if(it&&it.id!=null){const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);}} });
+    (lArr||[]).forEach(it=>{ if(it&&it.id!=null){const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);}} });
+    return out;
+  }
+
   function mergeTasks(bArr,lArr,rArr){
-    const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr);
-    const out=[];
-    orderedIds(bArr,lArr,rArr).forEach(id=>{
+    const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr),out=[];
+    mergeOrderIds(lArr,rArr).forEach(id=>{
       const b=B[id],l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
       if(inL&&inR){
         if(eq(l,r)) out.push(r);
@@ -560,9 +568,9 @@ lucide-react/dist/esm/lucide-react.js:
           out.push(Object.assign({},second,{id:id+"~d"+hsh(stable(second))}));
         }
       } else if(inL&&!inR){
-        if(inB&&eq(l,b)){/* 遠隔で削除・手元未変更 → 消す */} else out.push(l); // 追加 or 編集vs削除 → 残す
+        if(!(inB&&eq(l,b))) out.push(l);             // 追加 or 編集vs削除 → 残す
       } else if(inR&&!inL){
-        if(inB&&eq(r,b)){/* 手元で削除・遠隔未変更 → 消す */} else out.push(r);
+        if(!(inB&&eq(r,b))) out.push(r);
       }
     });
     return out;
@@ -570,9 +578,8 @@ lucide-react/dist/esm/lucide-react.js:
 
   // プロジェクト配列のマージ: 同IDはフィールドとタスクを合体(プロジェクト自体は複製しない)
   function mergeProjects(bArr,lArr,rArr){
-    const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr);
-    const out=[];
-    orderedIds(bArr,lArr,rArr).forEach(id=>{
+    const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr),out=[];
+    mergeOrderIds(lArr,rArr).forEach(id=>{
       const b=B[id]||null,l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
       if(inL&&inR){
         const merged=Object.assign({},r);
@@ -580,9 +587,9 @@ lucide-react/dist/esm/lucide-react.js:
         merged.tasks=mergeTasks(b?b.tasks:[], l.tasks||[], r.tasks||[]);
         out.push(merged);
       } else if(inL&&!inR){
-        if(inB&&eq(l,b)){/* 遠隔で削除・手元未変更 → 消す */} else out.push(l);
+        if(!(inB&&eq(l,b))) out.push(l);
       } else if(inR&&!inL){
-        if(inB&&eq(r,b)){/* 手元で削除・遠隔未変更 → 消す */} else out.push(r);
+        if(!(inB&&eq(r,b))) out.push(r);
       }
     });
     return out;
@@ -594,7 +601,7 @@ lucide-react/dist/esm/lucide-react.js:
     const hasId=(a)=>Array.isArray(a)&&a.length>0&&a.every(x=>x&&typeof x==="object"&&x.id!=null);
     if(hasId(l)||hasId(r)||hasId(b)){
       const B=indexById(b),L=indexById(l),R=indexById(r),out=[];
-      orderedIds(b,l,r).forEach(id=>{
+      mergeOrderIds(l,r).forEach(id=>{
         const bb=B[id],ll=L[id],rr=R[id],inB=id in B,inL=id in L,inR=id in R;
         if(inL&&inR) out.push(pick3(bb,ll,rr));
         else if(inL&&!inR){ if(!(inB&&eq(ll,bb))) out.push(ll); }
@@ -646,53 +653,65 @@ lucide-react/dist/esm/lucide-react.js:
   const db=getFirestore(app);
   const stateRef=doc(db,"taskapp","shared");
 
+  // ====== 同期エンジン(シンプル版) ======
+  // 設計: 変化(クラウド受信 or 手元編集)があったら reconcile() だけが動く。
+  //  ・「土台(前回同期点)」を更新するのは『手元とクラウドが一致した瞬間』だけ。
+  //  ・反映の再読込中(reloadPending)は何もしない → 無限ループを根本から防ぐ。
   let ready=false;
-  let applyingRemote=false;
-  let cloudHasRealData=false;          // 一度でも本物のクラウドデータを見たら true
-  let lastPushed=localStorage.getItem(STORAGE_KEY);
+  let applyingRemote=false;     // 手元へ書き戻し中(自分の書き込みを再処理しない)
+  let reloadPending=false;      // 画面更新の再読込待ち(待ちの間は処理しない)
+  let lastCloud=null;           // 直近に受信したクラウド内容(文字列 / 無ければ null)
+  let lastCloudKnown=false;     // クラウド状態を一度でも受信したか
   const origSetItem=Storage.prototype.setItem;
+  const getLocal=()=>window.localStorage.getItem(STORAGE_KEY);
+  const markReady=(msg)=>{ ready=true; if(msg) setStatus(msg,"rgba(20,140,70,.9)"); };
 
-  function pushToCloud(value,force){
-    // 安全弁: 本物のクラウドデータを、空/初期サンプルで上書きしない
-    if(!force && cloudHasRealData && isEmptyOrDefault(value)){
-      setStatus("初期データ保護のため送信中止","rgba(150,110,0,.92)");
-      return Promise.resolve();
+  // クラウドへ保存(本物データを空/初期サンプルで上書きしない安全弁つき)
+  function pushCloud(value){
+    if(lastCloudKnown && lastCloud && !isEmptyOrDefault(lastCloud) && isEmptyOrDefault(value)){
+      return Promise.resolve(); // 本物を空/初期で上書きしない
     }
-    const t=now();
     setStatus("保存中…","rgba(0,90,200,.85)");
-    return setDoc(stateRef,{data:value,updatedAt:t})
-      .then(()=>{lastPushed=value;setRev(t);setStatus("保存しました","rgba(20,140,70,.9)");})
-      .catch((e)=>{console.error("[sync] 送信失敗:",e);setStatus("エラー(保存): "+(e.code||e.message),"rgba(190,40,40,.92)");});
+    return setDoc(stateRef,{data:value,updatedAt:now()})
+      .then(()=>setStatus("同期OK","rgba(20,140,70,.9)"))
+      .catch((e)=>{console.error("[sync] 送信失敗:",e);setStatus("オフライン(後で同期)","rgba(120,90,0,.92)");});
   }
 
-  // 入力中(テキスト入力やメモ編集中)かどうか
-  function isEditing(){
-    const a=document.activeElement; if(!a) return false;
-    const tag=(a.tagName||"").toLowerCase();
-    return tag==="input"||tag==="textarea"||a.isContentEditable===true;
-  }
-  // 変更を「入力を邪魔せず・スクロール位置を保って」反映する(他デバイスの更新用)
-  let applyTarget=null, applyTimer=null;
-  function applyWhenIdle(value){
-    applyTarget=value;
-    const run=()=>{
-      if(isEditing()){ setStatus("新しい変更あり(入力後に反映)","rgba(120,90,0,.92)"); return; }
-      if(applyTimer){ clearInterval(applyTimer); applyTimer=null; }
-      const v=applyTarget; applyTarget=null;
-      try{ sessionStorage.setItem("taskapp-scroll",String(window.scrollY||0)); }catch{}
-      backup("before-apply",window.localStorage.getItem(STORAGE_KEY));
-      applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,v); applyingRemote=false;
-      location.reload();
-    };
-    if(isEditing()){ setStatus("新しい変更あり(入力後に反映)","rgba(120,90,0,.92)"); if(!applyTimer) applyTimer=setInterval(run,700); }
-    else run();
+  // 手元へ反映して画面を最新化(再読込)。再入防止に reloadPending を立てる。
+  function applyLocal(value){
+    if(reloadPending) return;
+    reloadPending=true;
+    try{ sessionStorage.setItem("taskapp-scroll",String(window.scrollY||0)); }catch{}
+    backup("before-apply",getLocal());
+    applyingRemote=true; origSetItem.call(window.localStorage,STORAGE_KEY,value); applyingRemote=false;
+    setStatus("最新を反映中…","rgba(0,90,200,.85)");
+    location.reload();
   }
 
-  function adoptRemote(remote,remoteRev){
-    setBase(remote);
-    setRev(remoteRev||now());
-    setStatus("読み込み(最新を取得)","rgba(20,140,70,.9)");
-    applyWhenIdle(remote);
+  // 中核: クラウド・手元・土台 を見て、必要な分だけ送る/取り込む。
+  function reconcile(){
+    if(RECOVER||reloadPending||applyingRemote||!lastCloudKnown) return;
+    const local=getLocal();
+
+    if(lastCloud===null){                                   // クラウドが空 → 本物の手元データだけ登録
+      if(local && !isEmptyOrDefault(local)) pushCloud(local);
+      markReady("同期OK"); return;
+    }
+    const cloud=lastCloud;
+
+    if(local===cloud){ setBase(local); markReady("同期OK"); return; } // 一致 = ここだけ土台を更新
+
+    if(isDefaultSample(local)){ applyLocal(cloud); return; }          // 手付かず端末 → クラウドを取り込む
+    if(isEmptyOrDefault(cloud) && !isEmptyOrDefault(local)){ pushCloud(local); markReady(); return; } // クラウド初期化 → 手元で回復
+
+    // 両方に本物データ → 3-wayマージ(両方の追加・編集を残す)
+    let merged;
+    try{ merged=JSON.stringify(mergeState(getBaseObj(), JSON.parse(local), JSON.parse(cloud))); }
+    catch(e){ console.error("[sync] マージ失敗:",e); return; }
+    const pushNeeded = merged!==cloud;
+    const localNeeded = merged!==local;
+    if(localNeeded){ if(pushNeeded) pushCloud(merged); applyLocal(merged); } // 画面更新あり(土台は再読込後に一致して更新)
+    else if(pushNeeded){ pushCloud(merged); markReady(); }                   // 送るだけ(echoで一致したら土台更新)
   }
 
   // ---- 復元モード(?recover のときだけ表示。自動同期は止めて安全に控えから戻す) ----
@@ -749,87 +768,35 @@ lucide-react/dist/esm/lucide-react.js:
   }
   if(RECOVER) buildRecoveryUI();
 
-  // 1) アプリの保存を横取り → 準備完了後はクラウドへ送る
+  // 1) アプリがタスクを保存したら、少し待って(まとめて)同期する
+  let editTimer=null;
   Storage.prototype.setItem=function(key,value){
     origSetItem.call(this,key,value);
-    if(this===window.localStorage&&key===STORAGE_KEY&&ready&&!applyingRemote&&!RECOVER&&value!==lastPushed){
-      pushToCloud(value);
+    if(this===window.localStorage&&key===STORAGE_KEY&&!applyingRemote&&!reloadPending&&!RECOVER){
+      clearTimeout(editTimer);
+      editTimer=setTimeout(reconcile,600);   // キー入力をまとめてから同期(書き込み回数を抑える)
     }
   };
 
-  // 2) クラウドの変化を購読 → 安全に解決 (復元モード中は購読しない)
+  // 2) クラウドの変化をリアルタイム購読 → reconcile に一本化
   if(!RECOVER) onSnapshot(stateRef,(snap)=>{
-    const local=window.localStorage.getItem(STORAGE_KEY);
-    if(!snap.exists()){
-      if(local)pushToCloud(local);
-      ready=true;
-      return;
+    if(snap.exists()){
+      const d=snap.data().data;
+      lastCloud=(typeof d==="string")?d:null;
+    }else{
+      lastCloud=null;
     }
-    const remote=snap.data().data;
-    const remoteRev=Number(snap.data().updatedAt||0);
-    if(typeof remote!=="string"){ready=true;return;}
-    if(!isEmptyOrDefault(remote)) cloudHasRealData=true;
-
-    if(remote===local){
-      lastPushed=remote;
-      setBase(remote);
-      setRev(Math.max(getRev(),remoteRev));
-      if(!ready){ready=true;setStatus("同期OK","rgba(20,140,70,.9)");}
-      return;
-    }
-
-    // 手付かずの初期サンプル → 共有データを取り込む(サンプルをクラウドへ混ぜない)
-    if(isDefaultSample(local)){
-      adoptRemote(remote,remoteRev);
-      return;
-    }
-    // クラウドが空/初期化 & 手元は本物 → 手元でクラウドを回復(自己修復)
-    if(isEmptyOrDefault(remote) && !isEmptyOrDefault(local)){
-      setBase(local); ready=true; pushToCloud(local);
-      return;
-    }
-
-    // 両方に本物データ → 3-wayマージで合体(両方の追加・編集を残す)
-    try{
-      const merged=mergeState(getBaseObj(), JSON.parse(local), JSON.parse(remote));
-      const mergedStr=JSON.stringify(merged);
-      setBase(mergedStr); setRev(now()); lastPushed=mergedStr;
-      const needLocal=mergedStr!==local;
-      const finish=()=>{
-        if(needLocal){
-          setStatus("マージしました","rgba(20,140,70,.9)");
-          applyWhenIdle(mergedStr);   // 入力を邪魔せず・スクロール位置を保って反映
-        }else{ ready=true; setStatus("同期OK","rgba(20,140,70,.9)"); }
-      };
-      if(mergedStr!==remote){
-        setStatus("マージ中…","rgba(0,90,200,.85)");
-        setDoc(stateRef,{data:mergedStr,updatedAt:now()}).then(finish)
-          .catch((e)=>{console.error("[sync] マージ送信失敗:",e);setStatus("エラー(マージ): "+(e.code||e.message),"rgba(190,40,40,.92)");});
-      }else{ finish(); }
-    }catch(e){
-      console.error("[sync] マージ失敗、フォールバック:",e);
-      if(remoteRev>getRev()) adoptRemote(remote,remoteRev); else { ready=true; pushToCloud(local); }
-    }
-  },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("エラー(受信): "+(e.code||e.message),"rgba(190,40,40,.92)");});
-
-  // 3) 取りこぼし防止 (復元モード中は止める)
-  if(!RECOVER) setInterval(()=>{
-    if(!ready)return;
-    const cur=window.localStorage.getItem(STORAGE_KEY);
-    if(cur&&cur!==lastPushed)pushToCloud(cur);
-  },4000);
+    lastCloudKnown=true;
+    reconcile();
+  },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("オフライン","rgba(120,90,0,.92)");});
 
   // 4) サービスワーカー登録: オンライン時は常に最新版を読み込む(古いキャッシュで初期化される問題を防ぐ)
   if("serviceWorker" in navigator){
     window.addEventListener("load",()=>{ navigator.serviceWorker.register("sw.js").catch((e)=>console.warn("[sw] 登録失敗:",e)); });
   }
 
-  // 5) オンライン復帰時に、未送信のオフライン変更を即座にクラウドへ反映
-  window.addEventListener("online",()=>{
-    if(!ready||RECOVER)return;
-    const cur=window.localStorage.getItem(STORAGE_KEY);
-    if(cur&&cur!==lastPushed)pushToCloud(cur);
-  });
+  // 5) オンライン復帰時に、すぐ同期し直す(未送信のオフライン変更を反映)
+  window.addEventListener("online",()=>{ if(!RECOVER) reconcile(); });
 
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
