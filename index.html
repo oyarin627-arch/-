@@ -492,7 +492,7 @@ lucide-react/dist/esm/lucide-react.js:
      上書き前に端末内バックアップ(保険) / 同期済み端末間は新しい方を採用 / 定期チェック / 状況表示 -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
-  import { getFirestore, doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+  import { getFirestore, doc, onSnapshot, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAr93zoGtmc3IaIiLnalzb3QDvW1Wlg_9w",
@@ -576,15 +576,18 @@ lucide-react/dist/esm/lucide-react.js:
     return out;
   }
 
-  // プロジェクト配列のマージ: 同IDはフィールドとタスクを合体(プロジェクト自体は複製しない)
+  // プロジェクト配列のマージ: 同IDは「tasksは個別マージ＋その他すべてのフィールド(deleted/完了等)を3-way合体」
   function mergeProjects(bArr,lArr,rArr){
     const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr),out=[];
     mergeOrderIds(lArr,rArr).forEach(id=>{
       const b=B[id]||null,l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
       if(inL&&inR){
-        const merged=Object.assign({},r);
-        ["name","emoji","color","notes"].forEach(k=>{ merged[k]=pick3(b?b[k]:undefined,l[k],r[k]); });
-        merged.tasks=mergeTasks(b?b.tasks:[], l.tasks||[], r.tasks||[]);
+        const merged=Object.assign({},r);   // クラウドの並び順を維持(全端末で同じ並びに)
+        const keys=new Set([].concat(b?Object.keys(b):[],Object.keys(l),Object.keys(r)));
+        keys.forEach(k=>{
+          if(k==="tasks") merged.tasks=mergeTasks(b?b.tasks:[], l.tasks||[], r.tasks||[]);
+          else merged[k]=pick3(b?b[k]:undefined, l[k], r[k]);
+        });
         out.push(merged);
       } else if(inL&&!inR){
         if(!(inB&&eq(l,b))) out.push(l);
@@ -668,6 +671,12 @@ lucide-react/dist/esm/lucide-react.js:
 
   // クラウドへ保存(本物データを空/初期サンプルで上書きしない安全弁つき)
   function pushCloud(value){
+    // オフライン中は送らない(古い内容のまま予約送信されて他端末の変更を上書きするのを防ぐ)
+    // → 回線復帰時に最新を読み直してマージしてから送る
+    if(typeof navigator!=="undefined" && navigator.onLine===false){
+      setStatus("オフライン(後で同期)","rgba(120,90,0,.92)");
+      return Promise.resolve();
+    }
     if(lastCloudKnown && lastCloud && !isEmptyOrDefault(lastCloud) && isEmptyOrDefault(value)){
       return Promise.resolve(); // 本物を空/初期で上書きしない
     }
@@ -795,8 +804,16 @@ lucide-react/dist/esm/lucide-react.js:
     window.addEventListener("load",()=>{ navigator.serviceWorker.register("sw.js").catch((e)=>console.warn("[sw] 登録失敗:",e)); });
   }
 
-  // 5) オンライン復帰時に、すぐ同期し直す(未送信のオフライン変更を反映)
-  window.addEventListener("online",()=>{ if(!RECOVER) reconcile(); });
+  // 5) オンライン復帰時: まず最新のクラウドを読み直し、それからマージして送る
+  //    (古い内容で上書きしないため。これがオフライン変更を安全に合体させる肝)
+  window.addEventListener("online",()=>{
+    if(RECOVER||reloadPending) return;
+    getDoc(stateRef).then((snap)=>{
+      lastCloud = snap.exists() ? (typeof snap.data().data==="string"?snap.data().data:null) : null;
+      lastCloudKnown=true;
+      reconcile();
+    }).catch((e)=>console.warn("[sync] 復帰時の取得失敗:",e));
+  });
 
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
