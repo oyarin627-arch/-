@@ -545,19 +545,29 @@ lucide-react/dist/esm/lucide-react.js:
   function indexById(arr){ const m={}; (arr||[]).forEach(it=>{ if(it&&it.id!=null) m[String(it.id)]=it; }); return m; }
   function orderedIds(){ const seen={},out=[]; for(const arr of arguments){ (arr||[]).forEach(it=>{ if(it&&it.id!=null){ const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);} } }); } return out; }
 
-  // タスク配列のマージ: 競合は両方残す(複製)、削除vs編集は編集優先
-  // 出力順を「クラウド(remote)基準 → 手元だけの追加を末尾」に統一
-  // → どの端末で計算しても同じ並びに収束し、一度揃えば「同じ」と判定されて送信が止まる(ループ防止)
-  function mergeOrderIds(lArr,rArr){
-    const out=[],seen={};
-    (rArr||[]).forEach(it=>{ if(it&&it.id!=null){const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);}} });
-    (lArr||[]).forEach(it=>{ if(it&&it.id!=null){const id=String(it.id); if(!seen[id]){seen[id]=1;out.push(id);}} });
+  // 出力順の決め方(並び替え対応の3-way順序マージ):
+  //  ・誰も並び替えていなければ「クラウド順→手元だけの追加を末尾」(従来どおり。全端末で同一に収束しループしない)。
+  //  ・片方だけが並び替えたら、その並びを採用する(= 並び替えが直後に元へ戻らない)。
+  //  ・両方が別々に並び替えた競合はクラウド優先で決定(決定論的に収束)。
+  function orderIds(arr){ const o=[]; (arr||[]).forEach(it=>{ if(it&&it.id!=null) o.push(String(it.id)); }); return o; }
+  function sameRelOrder(a,b){ // 共通idだけの相対順が同じか(=並び替えが無かったか)
+    const sb=new Set(b),sa=new Set(a);
+    return a.filter(x=>sb.has(x)).join("")===b.filter(x=>sa.has(x)).join("");
+  }
+  function mergeOrderIds(bArr,lArr,rArr){
+    const Bo=orderIds(bArr),Lo=orderIds(lArr),Ro=orderIds(rArr);
+    const localMoved=!sameRelOrder(Lo,Bo), remoteMoved=!sameRelOrder(Ro,Bo);
+    const primary = remoteMoved?Ro:(localMoved?Lo:Ro);   // 競合時/無変更時はクラウド優先
+    const secondary = primary===Ro?Lo:Ro;
+    const out=[],seen=new Set();
+    const add=id=>{ if(id!=null&&!seen.has(id)){ seen.add(id); out.push(id);} };
+    primary.forEach(add); secondary.forEach(add); Bo.forEach(add);
     return out;
   }
 
   function mergeTasks(bArr,lArr,rArr){
     const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr),out=[];
-    mergeOrderIds(lArr,rArr).forEach(id=>{
+    mergeOrderIds(bArr,lArr,rArr).forEach(id=>{
       const b=B[id],l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
       if(inL&&inR){
         if(eq(l,r)) out.push(r);
@@ -581,10 +591,10 @@ lucide-react/dist/esm/lucide-react.js:
   // プロジェクト配列のマージ: 同IDは「tasksは個別マージ＋その他すべてのフィールド(deleted/完了等)を3-way合体」
   function mergeProjects(bArr,lArr,rArr){
     const B=indexById(bArr),L=indexById(lArr),R=indexById(rArr),out=[];
-    mergeOrderIds(lArr,rArr).forEach(id=>{
+    mergeOrderIds(bArr,lArr,rArr).forEach(id=>{
       const b=B[id]||null,l=L[id],r=R[id],inB=id in B,inL=id in L,inR=id in R;
       if(inL&&inR){
-        const merged=Object.assign({},r);   // クラウドの並び順を維持(全端末で同じ並びに)
+        const merged=Object.assign({},r);   // フィールドの初期値はクラウド側を採用(出力順は mergeOrderIds で決定)
         const keys=new Set([].concat(b?Object.keys(b):[],Object.keys(l),Object.keys(r)));
         keys.forEach(k=>{
           if(k==="tasks") merged.tasks=mergeTasks(b?b.tasks:[], l.tasks||[], r.tasks||[]);
@@ -606,7 +616,7 @@ lucide-react/dist/esm/lucide-react.js:
     const hasId=(a)=>Array.isArray(a)&&a.length>0&&a.every(x=>x&&typeof x==="object"&&x.id!=null);
     if(hasId(l)||hasId(r)||hasId(b)){
       const B=indexById(b),L=indexById(l),R=indexById(r),out=[];
-      mergeOrderIds(l,r).forEach(id=>{
+      mergeOrderIds(b,l,r).forEach(id=>{
         const bb=B[id],ll=L[id],rr=R[id],inB=id in B,inL=id in L,inR=id in R;
         if(inL&&inR) out.push(pick3(bb,ll,rr));
         else if(inL&&!inR){ if(!(inB&&eq(ll,bb))) out.push(ll); }
@@ -829,6 +839,40 @@ lucide-react/dist/esm/lucide-react.js:
   // オフラインになったら「いま持っているクラウド値はもう当てにならない」とみなす。
   // 次にサーバ確定値を受け取るまで送信/反映を止め、古い値で相手の変更を上書きするのを防ぐ。
   window.addEventListener("offline",()=>{ cloudFresh=false; setStatus("オフライン(後で同期)","rgba(120,90,0,.92)"); });
+
+  // ---- メモ内の添付ファイル/リンクをタップで開けるようにする ----
+  // アプリのメモ欄は contenteditable で、その中の <a>(添付ファイル=data: URL, リンク)は
+  // 標準ではタップしても開けない(iOSは data:/download も不可)。ここで肩代わりして開く。
+  function dataURLtoBlob(dataURL){
+    const c=dataURL.indexOf(","), head=dataURL.slice(0,c), body=dataURL.slice(c+1);
+    const mime=(head.match(/data:([^;]+)/)||[])[1]||"application/octet-stream";
+    let bytes;
+    if(/;base64/i.test(head)){ const bin=atob(body); bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); }
+    else { const txt=decodeURIComponent(body); bytes=new Uint8Array(txt.length); for(let i=0;i<txt.length;i++) bytes[i]=txt.charCodeAt(i); }
+    return new Blob([bytes],{type:mime});
+  }
+  function openNoteHref(a){
+    const href=a.getAttribute("href")||"";
+    const name=a.getAttribute("download")||"file";
+    try{
+      if(/^data:/.test(href)){
+        // data: URL を「同期」で Blob 化してから開く(awaitを挟まずタップ操作の流れを保つ=iOSでブロックされない)
+        const url=URL.createObjectURL(dataURLtoBlob(href));
+        const w=window.open(url,"_blank");
+        if(!w){ const t=document.createElement("a"); t.href=url; t.download=name; document.body.appendChild(t); t.click(); t.remove(); }
+        setTimeout(()=>URL.revokeObjectURL(url),60000);
+      }else if(href){
+        window.open(href,"_blank","noopener");
+      }
+    }catch(e){ console.warn("[note] 添付を開けませんでした:",e); }
+  }
+  document.addEventListener("click",(ev)=>{
+    const t=ev.target;
+    const a=t&&t.closest&&t.closest("a.ta-note-file, a.ta-note-link");
+    if(!a) return;
+    ev.preventDefault(); ev.stopPropagation();   // 編集挿入点の移動などを止めてファイルを開く
+    openNoteHref(a);
+  },true);   // capture段階で先取りする
 
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
