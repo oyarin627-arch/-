@@ -896,9 +896,39 @@ lucide-react/dist/esm/lucide-react.js:
     selBtn.addEventListener("click",openTrashManager);
     const mountSel=()=>{ (document.body||document.documentElement).appendChild(selBtn); };
     if(document.body)mountSel(); else window.addEventListener("DOMContentLoaded",mountSel);
-    function refreshSelBtn(){ selBtn.style.display = trashViewVisible() ? "block" : "none"; }
-    const mo=new MutationObserver(()=>{ clearTimeout(refreshSelBtn._t); refreshSelBtn._t=setTimeout(refreshSelBtn,80); });
-    const startMO=()=>{ try{ mo.observe(document.body,{childList:true,subtree:true}); }catch{} refreshSelBtn(); };
+
+    // いまプロジェクト詳細画面か?(.ta-split のレールに選択中カードがある)
+    function activeRailIndex(){
+      const cards=[...document.querySelectorAll(".ta-rail-card")];
+      return cards.findIndex(el=>el.classList.contains("ta-rail-active"));
+    }
+    const detailViewVisible=()=>activeRailIndex()>=0;
+    // 詳細画面で開いている対象プロジェクトを特定(レールの並び=有効プロジェクトの並びと一致)
+    function currentProject(st){
+      const list=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&!p.deleted&&!p.completed):[];
+      const idx=activeRailIndex();
+      let p=(idx>=0&&idx<list.length)?list[idx]:null;
+      const h=document.querySelector(".ta-split .ta-content-head h2");   // 見出し名でも照合(ずれ対策)
+      const nm=h?h.textContent.trim():null;
+      if(nm && (!p||p.name!==nm)){ const byName=list.filter(q=>q.name===nm); if(byName.length===1) p=byName[0]; }
+      return p;
+    }
+    // フローティング「＋ 期限・メモ」ボタン(プロジェクト詳細画面のときだけ表示)
+    const addBtn=document.createElement("button");
+    addBtn.type="button"; addBtn.textContent="＋ 期限・メモ";
+    addBtn.style.cssText="position:fixed;right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:99998;"+
+      "font:600 14px/1 -apple-system,system-ui,sans-serif;color:#fff;background:#007aff;border:0;"+
+      "padding:12px 16px;border-radius:22px;box-shadow:0 3px 10px rgba(0,0,0,.28);display:none;";
+    addBtn.addEventListener("click",openTaskComposer);
+    const mountAdd=()=>{ (document.body||document.documentElement).appendChild(addBtn); };
+    if(document.body)mountAdd(); else window.addEventListener("DOMContentLoaded",mountAdd);
+
+    function refreshUI(){
+      selBtn.style.display = trashViewVisible() ? "block" : "none";
+      addBtn.style.display = detailViewVisible() ? "block" : "none";
+    }
+    const mo=new MutationObserver(()=>{ clearTimeout(refreshUI._t); refreshUI._t=setTimeout(refreshUI,80); });
+    const startMO=()=>{ try{ mo.observe(document.body,{childList:true,subtree:true}); }catch{} refreshUI(); };
     if(document.body)startMO(); else window.addEventListener("DOMContentLoaded",startMO);
 
     function openTrashManager(){
@@ -968,6 +998,70 @@ lucide-react/dist/esm/lucide-react.js:
       }
 
       (document.body||document.documentElement).appendChild(ov);
+    }
+
+    // 新規タスクを「内容＋期限＋メモ」をまとめて入力して追加(詳細画面の現在のプロジェクトへ)
+    const newId=()=>"t"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+    function textToMemoHTML(t){
+      t=(t||"").replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+      if(!t.trim()) return "";
+      return t.split("\n").map(line=>"<div>"+(escH(line)||"<br>")+"</div>").join("");   // アプリのメモはHTML。改行を<div>で保持
+    }
+    function openTaskComposer(){
+      const st=readState();
+      const proj=currentProject(st);
+      if(!proj){ alert("追加先のプロジェクトが特定できませんでした。プロジェクトを開いてからお試しください。"); return; }
+
+      const ov=document.createElement("div");
+      ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);"+
+        "display:flex;flex-direction:column;justify-content:flex-end;font:15px/1.5 -apple-system,system-ui,sans-serif;";
+      const sheet=document.createElement("div");
+      sheet.style.cssText="background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:90vh;"+
+        "display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+      const fld="width:100%;box-sizing:border-box;border:0;border-radius:10px;background:#fff;padding:13px 14px;font-size:16px;color:#111;";
+      sheet.innerHTML=
+        `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;flex:none">`+
+          `<button data-act="cancel" style="background:none;border:0;color:#007aff;font-size:16px;padding:4px 2px">キャンセル</button>`+
+          `<b style="font-size:16px">新規タスク</b>`+
+          `<button data-act="add" style="background:none;border:0;color:#007aff;font-size:16px;font-weight:700;padding:4px 2px">追加</button>`+
+        `</div>`+
+        `<div style="overflow:auto;-webkit-overflow-scrolling:touch;padding:4px 16px 16px;display:flex;flex-direction:column;gap:14px">`+
+          `<div style="color:#8e8e93;font-size:13px;margin-top:2px">追加先：${escH(proj.emoji||"📁")} ${escH(proj.name||"(無題)")}</div>`+
+          `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">内容</div>`+
+            `<input data-f="text" type="text" placeholder="タスクの内容" style="${fld}"></div>`+
+          `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">期限（任意）</div>`+
+            `<input data-f="date" type="date" style="${fld}"></div>`+
+          `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">メモ（任意）</div>`+
+            `<textarea data-f="memo" rows="4" placeholder="メモを入力…" style="${fld}resize:vertical;min-height:96px;line-height:1.5"></textarea></div>`+
+        `</div>`;
+      ov.appendChild(sheet);
+
+      const getF=(n)=>sheet.querySelector('[data-f="'+n+'"]');
+      function submit(){
+        const text=(getF("text").value||"").trim();
+        if(!text){ getF("text").focus(); return; }
+        const date=(getF("date").value||"").trim();
+        const memo=textToMemoHTML(getF("memo").value);
+        const fresh=readState();
+        if(!fresh||!Array.isArray(fresh.projects)){ alert("追加に失敗しました(データ未取得)。"); return; }
+        const target=fresh.projects.find(p=>p&&p.id===proj.id) || currentProject(fresh);
+        if(!target){ alert("追加先のプロジェクトが見つかりませんでした。"); return; }
+        target.tasks=Array.isArray(target.tasks)?target.tasks:[];
+        target.tasks.push({id:newId(),text,done:false,deadline:date||null,memo,subtasks:[]});
+        try{ backup("before-add-task",localStorage.getItem(STORAGE_KEY)); }catch{}
+        try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }
+        catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
+        ov.remove();
+        location.reload();   // 追加を画面に反映(リロード後にクラウドへ同期)
+      }
+      sheet.addEventListener("click",(ev)=>{
+        const act=ev.target.closest("[data-act]"); if(!act) return;
+        if(act.getAttribute("data-act")==="cancel") ov.remove(); else submit();
+      });
+      getF("text").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); getF("date").focus(); } });
+      ov.addEventListener("click",(ev)=>{ if(ev.target===ov) ov.remove(); });
+      (document.body||document.documentElement).appendChild(ov);
+      try{ getF("text").focus(); }catch{}
     }
   }
 
