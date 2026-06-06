@@ -874,6 +874,103 @@ lucide-react/dist/esm/lucide-react.js:
     openNoteHref(a);
   },true);   // capture段階で先取りする
 
+  // ====== ゴミ箱の複数選択削除(iOS風)。アプリ本体はミニファイ済みのため、ここから上乗せ実装 ======
+  if(!RECOVER){
+    const TRASH_TITLE="ゴミ箱";
+    const escH=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    const readState=()=>{ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)||"null"); }catch{ return null; } };
+    // いま「ゴミ箱」画面か?(.ta-bin-view + 見出しが「ゴミ箱」+ 削除済みカードがある)
+    function trashViewVisible(){
+      const v=document.querySelector(".ta-bin-view");
+      if(!v) return false;
+      const h=v.querySelector(".ta-content-head h2");
+      if(!h || h.textContent.trim()!==TRASH_TITLE) return false;
+      return !!v.querySelector(".ta-bin-proj");
+    }
+    // フローティング「選択」ボタン(ゴミ箱画面のときだけ表示)
+    const selBtn=document.createElement("button");
+    selBtn.type="button"; selBtn.textContent="選択";
+    selBtn.style.cssText="position:fixed;top:max(10px,env(safe-area-inset-top,0px));right:12px;z-index:99998;"+
+      "font:600 15px/1 -apple-system,system-ui,sans-serif;color:#fff;background:#007aff;border:0;"+
+      "padding:9px 15px;border-radius:18px;box-shadow:0 2px 8px rgba(0,0,0,.25);display:none;";
+    selBtn.addEventListener("click",openTrashManager);
+    const mountSel=()=>{ (document.body||document.documentElement).appendChild(selBtn); };
+    if(document.body)mountSel(); else window.addEventListener("DOMContentLoaded",mountSel);
+    function refreshSelBtn(){ selBtn.style.display = trashViewVisible() ? "block" : "none"; }
+    const mo=new MutationObserver(()=>{ clearTimeout(refreshSelBtn._t); refreshSelBtn._t=setTimeout(refreshSelBtn,80); });
+    const startMO=()=>{ try{ mo.observe(document.body,{childList:true,subtree:true}); }catch{} refreshSelBtn(); };
+    if(document.body)startMO(); else window.addEventListener("DOMContentLoaded",startMO);
+
+    function openTrashManager(){
+      const st=readState();
+      const deleted=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&p.deleted):[];
+      if(!deleted.length){ alert("ゴミ箱は空です。"); return; }
+      const selected=new Set();   // 選択中のプロジェクトid
+
+      const ov=document.createElement("div");
+      ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);"+
+        "display:flex;flex-direction:column;justify-content:flex-end;font:15px/1.5 -apple-system,system-ui,sans-serif;";
+      const sheet=document.createElement("div");
+      sheet.style.cssText="background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:86vh;"+
+        "display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+      ov.appendChild(sheet);
+
+      function render(){
+        const all=selected.size===deleted.length;
+        let rows="";
+        deleted.forEach((p,idx)=>{
+          const on=selected.has(p.id);
+          const cnt=(p.tasks||[]).length;
+          rows+=`<div data-idx="${idx}" style="display:flex;align-items:center;gap:12px;padding:13px 16px;background:#fff;border-bottom:1px solid #e5e5ea;cursor:pointer">`+
+            `<span style="width:22px;height:22px;border-radius:50%;flex:none;border:2px solid ${on?"#007aff":"#c7c7cc"};background:${on?"#007aff":"#fff"};display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px">${on?"✓":""}</span>`+
+            `<span style="font-size:22px;flex:none">${escH(p.emoji||"📁")}</span>`+
+            `<span style="flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(p.name||"(無題)")}</span>`+
+            `<span style="color:#8e8e93;font-size:13px;flex:none">${cnt}件</span>`+
+          `</div>`;
+        });
+        sheet.innerHTML=
+          `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;flex:none">`+
+            `<button data-act="cancel" style="background:none;border:0;color:#007aff;font-size:16px;padding:4px 2px">キャンセル</button>`+
+            `<b style="font-size:16px">ゴミ箱を整理</b>`+
+            `<button data-act="all" style="background:none;border:0;color:#007aff;font-size:16px;padding:4px 2px">${all?"全解除":"全選択"}</button>`+
+          `</div>`+
+          `<div style="overflow:auto;-webkit-overflow-scrolling:touch;border-top:1px solid #e5e5ea;border-bottom:1px solid #e5e5ea;flex:1 1 auto">${rows}</div>`+
+          `<div style="padding:12px 16px 16px;flex:none">`+
+            `<button data-act="del" ${selected.size?"":"disabled"} style="width:100%;padding:14px;border:0;border-radius:12px;font-size:16px;font-weight:700;color:#fff;background:${selected.size?"#ff3b30":"#ffb3ae"}">`+
+              `選択した${selected.size}件を完全に削除`+
+            `</button>`+
+          `</div>`;
+      }
+      render();
+
+      sheet.addEventListener("click",(ev)=>{
+        const row=ev.target.closest("[data-idx]");
+        if(row){ const p=deleted[Number(row.getAttribute("data-idx"))]; if(p){ selected.has(p.id)?selected.delete(p.id):selected.add(p.id); render(); } return; }
+        const act=ev.target.closest("[data-act]"); if(!act) return;
+        const a=act.getAttribute("data-act");
+        if(a==="cancel") ov.remove();
+        else if(a==="all"){ if(selected.size===deleted.length) selected.clear(); else deleted.forEach(p=>selected.add(p.id)); render(); }
+        else if(a==="del") doDelete();
+      });
+      ov.addEventListener("click",(ev)=>{ if(ev.target===ov) ov.remove(); });
+
+      function doDelete(){
+        if(!selected.size) return;
+        if(!confirm("選択した"+selected.size+"件を完全に削除します。\n元に戻せません。よろしいですか?")) return;
+        const fresh=readState();
+        if(!fresh||!Array.isArray(fresh.projects)){ alert("削除に失敗しました(データ未取得)。"); return; }
+        try{ backup("before-trash-purge",localStorage.getItem(STORAGE_KEY)); }catch{}
+        fresh.projects=fresh.projects.filter(p=>!(p&&p.deleted&&selected.has(p.id)));   // 完全削除=配列から除去
+        try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }   // フック付きsetItem→保存&同期予約
+        catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
+        ov.remove();
+        location.reload();   // アプリ表示を更新(リロード後に削除がクラウドへ反映される)
+      }
+
+      (document.body||document.documentElement).appendChild(ov);
+    }
+  }
+
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
     try{ const y=sessionStorage.getItem("taskapp-scroll"); if(y!=null){ window.scrollTo(0,Number(y)); sessionStorage.removeItem("taskapp-scroll"); } }catch{}
