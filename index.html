@@ -487,12 +487,14 @@ lucide-react/dist/esm/lucide-react.js:
 
 </script>
 <!-- firestore-sync-bridge -->
-<!-- Firestore 同期ブリッジ(v5): 元アプリのコードは未変更。
+<!-- Firestore 同期ブリッジ(v6): 元アプリのコードは未変更。
      安全弁: 本物のクラウドデータを「空/初期サンプル」で上書きしない / 手付かずの初期画面は共有データを取り込む /
-     上書き前に端末内バックアップ(保険) / 同期済み端末間は新しい方を採用 / 定期チェック / 状況表示 -->
+     上書き前に端末内バックアップ(保険) / 同期済み端末間は新しい方を採用 / 定期チェック / 状況表示 /
+     v6: 再接続直後の「キャッシュ(古いクラウド値)」を土台に送信しない → サーバ確定値を得てからマージ送信する
+         (オフライン端末が復帰時に相手の最新タスクを取りこぼし・上書きする不具合を修正) -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
-  import { getFirestore, doc, onSnapshot, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+  import { getFirestore, doc, onSnapshot, setDoc, getDocFromServer } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAr93zoGtmc3IaIiLnalzb3QDvW1Wlg_9w",
@@ -665,6 +667,8 @@ lucide-react/dist/esm/lucide-react.js:
   let reloadPending=false;      // 画面更新の再読込待ち(待ちの間は処理しない)
   let lastCloud=null;           // 直近に受信したクラウド内容(文字列 / 無ければ null)
   let lastCloudKnown=false;     // クラウド状態を一度でも受信したか
+  let cloudFresh=false;         // いま手元のクラウド値が「サーバ確定の最新」か。再接続直後のキャッシュ(古い値)の
+                                // 間は false にして、その値を土台に送信/反映しない(相手の変更の上書きを防ぐ)
   const origSetItem=Storage.prototype.setItem;
   const getLocal=()=>window.localStorage.getItem(STORAGE_KEY);
   const markReady=(msg)=>{ ready=true; if(msg) setStatus(msg,"rgba(20,140,70,.9)"); };
@@ -699,7 +703,7 @@ lucide-react/dist/esm/lucide-react.js:
 
   // 中核: クラウド・手元・土台 を見て、必要な分だけ送る/取り込む。
   function reconcile(){
-    if(RECOVER||reloadPending||applyingRemote||!lastCloudKnown) return;
+    if(RECOVER||reloadPending||applyingRemote||!lastCloudKnown||!cloudFresh) return;
     const local=getLocal();
 
     if(lastCloud===null){                                   // クラウドが空 → 本物の手元データだけ登録
@@ -788,7 +792,7 @@ lucide-react/dist/esm/lucide-react.js:
   };
 
   // 2) クラウドの変化をリアルタイム購読 → reconcile に一本化
-  if(!RECOVER) onSnapshot(stateRef,(snap)=>{
+  if(!RECOVER) onSnapshot(stateRef,{includeMetadataChanges:true},(snap)=>{
     if(snap.exists()){
       const d=snap.data().data;
       lastCloud=(typeof d==="string")?d:null;
@@ -796,6 +800,10 @@ lucide-react/dist/esm/lucide-react.js:
       lastCloud=null;
     }
     lastCloudKnown=true;
+    // fromCache=true は「再接続直後などに出る“古いキャッシュ値”」。これを土台に送信すると
+    // 相手の最新変更を上書きしてしまう(本バグの原因)。サーバ確定値(fromCache=false)のときだけ同期を動かす。
+    cloudFresh = !!(snap.metadata && snap.metadata.fromCache===false);
+    if(!cloudFresh && navigator.onLine===false) setStatus("オフライン(後で同期)","rgba(120,90,0,.92)");
     reconcile();
   },(e)=>{console.error("[sync] 受信エラー:",e);setStatus("オフライン","rgba(120,90,0,.92)");});
 
@@ -808,12 +816,19 @@ lucide-react/dist/esm/lucide-react.js:
   //    (古い内容で上書きしないため。これがオフライン変更を安全に合体させる肝)
   window.addEventListener("online",()=>{
     if(RECOVER||reloadPending) return;
-    getDoc(stateRef).then((snap)=>{
+    // 復帰時は“サーバから”最新を読み直す(キャッシュではなく確定値)。これを土台にマージするので
+    // 相手の変更を取りこぼさない。読めたら cloudFresh=true にして同期を許可する。
+    getDocFromServer(stateRef).then((snap)=>{
       lastCloud = snap.exists() ? (typeof snap.data().data==="string"?snap.data().data:null) : null;
       lastCloudKnown=true;
+      cloudFresh=true;
       reconcile();
     }).catch((e)=>console.warn("[sync] 復帰時の取得失敗:",e));
   });
+
+  // オフラインになったら「いま持っているクラウド値はもう当てにならない」とみなす。
+  // 次にサーバ確定値を受け取るまで送信/反映を止め、古い値で相手の変更を上書きするのを防ぐ。
+  window.addEventListener("offline",()=>{ cloudFresh=false; setStatus("オフライン(後で同期)","rgba(120,90,0,.92)"); });
 
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
