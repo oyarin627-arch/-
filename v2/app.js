@@ -30,6 +30,16 @@ function ensureFrame(page){
   return frames[page.id];
 }
 
+// iOSではiframeの高さを上下固定だと中身の100dvhが潰れるため、実ピクセルで高さを指定する
+function sizeFrames(){
+  const tab = tabbar.offsetHeight || 60;
+  const h = Math.max(0, window.innerHeight - tab);
+  for(const f of Object.values(frames)) f.style.height = h + "px";
+}
+window.addEventListener("resize", sizeFrames);
+window.addEventListener("orientationchange", () => setTimeout(sizeFrames, 200));
+if(window.visualViewport) window.visualViewport.addEventListener("resize", sizeFrames);
+
 function buildTabs(){
   tabbar.innerHTML = "";
   for(const p of PAGES){
@@ -52,7 +62,7 @@ function navigate(){
 
   // 埋め込みページ: 該当iframeだけ表示、他は隠す
   Object.values(frames).forEach(f => f.classList.remove("show"));
-  if(page.embed) ensureFrame(page).classList.add("show");
+  if(page.embed){ ensureFrame(page).classList.add("show"); sizeFrames(); }
 
   // 埋め込み時はv2ヘッダーを隠して従来アプリを全面表示
   header.style.display = page.embed ? "none" : "";
