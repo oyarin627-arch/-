@@ -1,5 +1,6 @@
-// 各ページの描画。まずは「マイページ(容量確認)」を実装。他は段階的に作る。
+// 各ページの描画。マイページ(容量)＋掲示板を実装。他は段階的に作る。
 import { rawLegacy, readLegacyState, byteSize, fmtBytes } from "./store.js";
+export { renderBoard } from "./board.js";
 
 function placeholder(el, title, note){
   el.innerHTML =
@@ -7,11 +8,6 @@ function placeholder(el, title, note){
     `<p class="muted">${note || "このページはこれから作っていきます。"}</p></div>`;
 }
 
-export function renderBoard(el){
-  placeholder(el, "掲示板",
-    "ブロックを複数追加できる掲示板。半透明＋色変更、メモと同じ文字編集、写真添付、" +
-    "横スワイプで編集ボタン、長押しで並び替え・アーカイブ、アーカイブ閲覧 … を順に作ります。");
-}
 export function renderTasks(el){
   placeholder(el, "タスク",
     "現行アプリ（/）のタスク機能を、ここに作り直していきます。完成・検証までは現行アプリをご利用ください。");
