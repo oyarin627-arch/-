@@ -527,6 +527,22 @@ lucide-react/dist/esm/lucide-react.js:
   if(document.body)mountUI(); else window.addEventListener("DOMContentLoaded",mountUI);
   setStatus("接続中…","rgba(0,0,0,.72)");
 
+  // ---- アプリ本体(ミニファイ済み)へCSSを上乗せして表示・操作性を調整 ----
+  (function injectCSS(){
+    const css=
+      "/* ① プロジェクト詳細の下部「タスクを追加」バーを隠す(下中央のボタンに一本化) */\n"+
+      ".ta-add-bar-quick{ display:none !important; }\n"+
+      "/* ④⑤ 並び替えの『ポチポチ』を確実に掴めるように(スクロールに奪われない)＆長押しで文字選択させない */\n"+
+      ".ta-grip, .ta-card-grip{ touch-action:none !important; }\n"+
+      ".ta-card, .ta-bin-proj, .ta-rail-card{ -webkit-user-select:none !important; user-select:none !important; -webkit-touch-callout:none !important; }\n"+
+      "/* ⑥ 左上のウインドウコントロール(•••)とUIが重ならないよう余白を確保 */\n"+
+      ".ta-rail{ padding-top:56px !important; }\n"+
+      ".ta-back{ margin-left:48px !important; }\n"+
+      ".ta-memo-head{ padding-left:52px !important; }\n";
+    const st=document.createElement("style"); st.textContent=css;
+    (document.head||document.documentElement).appendChild(st);
+  })();
+
   const now=()=>Date.now();
   const getRev=()=>Number(localStorage.getItem(REV_KEY)||0);
   const setRev=(t)=>{try{localStorage.setItem(REV_KEY,String(t));}catch{}};
@@ -923,6 +939,20 @@ lucide-react/dist/esm/lucide-react.js:
     openNoteHref(a);
   },true);   // capture段階で先取りする
 
+  // ③ メモへの貼り付けを安全化: 余計な書式(白文字/背景/壊れた箇条書きHTML等)を取り除き、
+  //   このメモで編集できる「素のテキスト(改行は保持)」として挿入する。
+  document.addEventListener("paste",(ev)=>{
+    const ed=ev.target && ev.target.closest && ev.target.closest(".note-editor");
+    if(!ed) return;
+    ev.preventDefault(); ev.stopPropagation();   // アプリ既定の貼り付け処理より先に横取り
+    let text="";
+    try{ const cd=ev.clipboardData||window.clipboardData; text=(cd&&cd.getData&&cd.getData("text/plain"))||""; }catch{}
+    if(!text) return;
+    ed.focus();
+    // insertText は input イベントを発火するのでアプリ側の自動保存もそのまま動く
+    try{ document.execCommand("insertText",false,text); }catch{}
+  },true);   // capture段階で先取り
+
   // ====== ゴミ箱の複数選択削除(iOS風)。アプリ本体はミニファイ済みのため、ここから上乗せ実装 ======
   if(!RECOVER){
     const TRASH_TITLE="ゴミ箱";
@@ -962,12 +992,12 @@ lucide-react/dist/esm/lucide-react.js:
       if(nm && (!p||p.name!==nm)){ const byName=list.filter(q=>q.name===nm); if(byName.length===1) p=byName[0]; }
       return p;
     }
-    // フローティング「＋ 期限・メモ」ボタン(プロジェクト詳細画面のときだけ表示)
+    // フローティング「タスクを追加」ボタン(プロジェクト詳細画面のときだけ表示／内容＋期限＋メモを入力)
     const addBtn=document.createElement("button");
-    addBtn.type="button"; addBtn.textContent="＋ 期限・メモ";
-    addBtn.style.cssText="position:fixed;right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:99998;"+
-      "font:600 14px/1 -apple-system,system-ui,sans-serif;color:#fff;background:#007aff;border:0;"+
-      "padding:12px 16px;border-radius:22px;box-shadow:0 3px 10px rgba(0,0,0,.28);display:none;";
+    addBtn.type="button"; addBtn.textContent="タスクを追加";
+    addBtn.style.cssText="position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:99998;"+
+      "font:600 16px/1 -apple-system,system-ui,sans-serif;color:#fff;background:#007aff;border:0;"+
+      "padding:14px 28px;border-radius:24px;box-shadow:0 3px 12px rgba(0,0,0,.3);display:none;";
     addBtn.addEventListener("click",openTaskComposer);
     const mountAdd=()=>{ (document.body||document.documentElement).appendChild(addBtn); };
     if(document.body)mountAdd(); else window.addEventListener("DOMContentLoaded",mountAdd);
