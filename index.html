@@ -711,6 +711,22 @@ lucide-react/dist/esm/lucide-react.js:
     location.reload();
   }
 
+  // 安全弁の判定用: 本物データの「量」(削除されていないプロジェクト数と総タスク数)を測る
+  function weight(str){
+    try{ const d=JSON.parse(str); let t=0,p=0;
+      (d.projects||[]).forEach(x=>{ if(x&&!x.deleted){ p++; t+=(x.tasks||[]).length; } });
+      return {t,p};
+    }catch{ return {t:0,p:0}; }
+  }
+  // クラウド側の欠落で「手元の本物データが大量に消える」マージかどうか
+  // (= 手元は本物で十分な量がある のに マージ結果がサンプル/空 か 大半を失う)
+  function isWipe(localStr, mergedStr){
+    if(isEmptyOrDefault(localStr)) return false;          // 手元が元々サンプル/空なら保護不要
+    if(isEmptyOrDefault(mergedStr)) return true;          // 本物→サンプル/空 への激減は常に異常
+    const L=weight(localStr), M=weight(mergedStr);
+    return L.t>=10 && M.t < Math.ceil(L.t*0.4);           // タスクが4割未満に激減
+  }
+
   // 中核: クラウド・手元・土台 を見て、必要な分だけ送る/取り込む。
   function reconcile(){
     if(RECOVER||reloadPending||applyingRemote||!lastCloudKnown||!cloudFresh) return;
@@ -733,6 +749,15 @@ lucide-react/dist/esm/lucide-react.js:
     catch(e){ console.error("[sync] マージ失敗:",e); return; }
     const pushNeeded = merged!==cloud;
     const localNeeded = merged!==local;
+    // ★安全弁: クラウドの欠落で手元の本物データが大量消失するマージは取り込まない(カスケード消失＆ループの防止)
+    if(localNeeded && isWipe(local, merged)){
+      backup("guard-blocked-wipe", local);
+      const C=weight(cloud), L=weight(local);
+      console.warn("[sync] 大量消失を検知→取り込み中止. local=",L,"cloud=",C);
+      setStatus("⚠データ保護: 取り込み中止","rgba(150,0,0,.92)");
+      if(C.t < L.t) pushCloud(local);   // クラウドが小さい(壊れている)→ 本物を送って回復(自己修復)
+      markReady(); return;              // applyLocalしない=画面の本物を守る&再読込ループを止める
+    }
     if(localNeeded){ if(pushNeeded) pushCloud(merged); applyLocal(merged); } // 画面更新あり(土台は再読込後に一致して更新)
     else if(pushNeeded){ pushCloud(merged); markReady(); }                   // 送るだけ(echoで一致したら土台更新)
   }
@@ -751,10 +776,11 @@ lucide-react/dist/esm/lucide-react.js:
     let backups=[]; try{backups=JSON.parse(localStorage.getItem(BACKUP_KEY)||"[]");}catch{}
     const cur=localStorage.getItem(STORAGE_KEY);
     let html="<h2 style='margin:0 0 8px'>🛟 復元モード</h2>";
-    html+="<p style='color:#555;margin:0 0 16px'>この端末に残っている控えから、タスクを元に戻せます。戻したい候補の「これを復元」を押すと、全端末へ反映されます。(このモードでは自動同期は止まっています)</p>";
+    html+="<p style='color:#555;margin:0 0 16px'>この端末に残っている控えから、タスクを元に戻せます。「これを復元」で全端末へ反映、「📋 書き出す」でテキストとして保存できます（クラウドが不調でも安全に取り出せます）。このモードでは自動同期は止まっています。</p>";
     html+="<div style='border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:12px'>";
     html+="<b>いまこの端末の表示内容</b><br>プロジェクト "+countProjects(cur)+"件 / タスク "+countTasks(cur)+"件";
-    html+="<br><button data-cur='1' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#007aff;color:#fff'>この内容をクラウドへ復元</button></div>";
+    html+="<br><button data-cur='1' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#007aff;color:#fff'>この内容をクラウドへ復元</button>"+
+      " <button data-expcur='1' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#555;color:#fff'>📋 書き出す</button></div>";
     html+="<h3 style='margin:16px 0 8px'>端末内の控え（新しい順）</h3>";
     if(!backups.length){
       html+="<p style='color:#a00'>この端末には控えが見つかりませんでした。よく使っていた別の端末で、同じURLに <code>?recover</code> を付けて開いてみてください。</p>";
@@ -764,7 +790,8 @@ lucide-react/dist/esm/lucide-react.js:
         html+="<div style='border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:10px'>";
         html+="<div style='color:#555;font-size:13px'>"+esc(fmtTime(b.t))+" ／ "+esc(b.label||"")+"</div>";
         html+="プロジェクト "+countProjects(b.value)+"件 / タスク "+countTasks(b.value)+"件";
-        html+="<br><button data-idx='"+i+"' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#148a46;color:#fff'>これを復元</button></div>";
+        html+="<br><button data-idx='"+i+"' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#148a46;color:#fff'>これを復元</button>"+
+          " <button data-exp='"+i+"' style='margin-top:8px;padding:8px 12px;border:0;border-radius:8px;background:#555;color:#fff'>📋 書き出す</button></div>";
       }
     }
     html+="<div style='margin-top:20px'><button data-close='1' style='padding:8px 12px;border:1px solid #ccc;border-radius:8px;background:#f2f2f2'>閉じる（通常画面へ）</button></div>";
@@ -772,19 +799,41 @@ lucide-react/dist/esm/lucide-react.js:
     const baseUrl=location.origin+location.pathname;
     function doRestore(value){
       if(!value){alert("内容が空です。");return;}
-      if(!confirm("この内容（タスク"+countTasks(value)+"件）を復元し、全端末へ反映します。よろしいですか？"))return;
+      if(!confirm("この内容（タスク"+countTasks(value)+"件）をこの端末に復元します。よろしいですか？\n（クラウドへは通信が回復し次第、この端末から自動反映されます）"))return;
       applyingRemote=true; origSetItem.call(localStorage,STORAGE_KEY,value); applyingRemote=false;
+      setBase(value);   // 土台も復元値に合わせる(復帰直後の誤判定で再び消えるのを防ぐ)
       setRev(now());
       setDoc(stateRef,{data:value,updatedAt:now()}).then(()=>{
-        alert("復元しました。通常画面に戻ります。");
+        alert("復元しました（クラウドへも反映済み）。通常画面に戻ります。");
         location.href=baseUrl;
-      }).catch((e)=>{ alert("復元の保存に失敗しました: "+(e.code||e.message)); });
+      }).catch((e)=>{
+        alert("この端末には復元しました。クラウドは現在混雑（容量制限）のため、通信回復後に自動で反映されます。\n通常画面に戻ります。");
+        location.href=baseUrl;
+      });
+    }
+    function exportValue(value){
+      if(!value){ alert("内容が空です。"); return; }
+      const back=document.createElement("div");
+      back.style.cssText="position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.5);display:flex;flex-direction:column;padding:16px;box-sizing:border-box";
+      back.innerHTML="<div style='color:#fff;margin-bottom:8px'>下のテキスト（タスク"+countTasks(value)+"件）を全選択してコピーし、メモ等に保存してください。</div>";
+      const ta=document.createElement("textarea"); ta.readOnly=true; ta.value=value;
+      ta.style.cssText="flex:1;width:100%;box-sizing:border-box;font:12px/1.4 monospace;padding:10px;border-radius:8px;border:0";
+      const row=document.createElement("div"); row.style.cssText="display:flex;gap:8px;margin-top:8px";
+      const cp=document.createElement("button"); cp.textContent="コピー"; cp.style.cssText="flex:1;padding:12px;border:0;border-radius:8px;background:#007aff;color:#fff;font-weight:700";
+      const cl=document.createElement("button"); cl.textContent="閉じる"; cl.style.cssText="flex:1;padding:12px;border:0;border-radius:8px;background:#eee;color:#111";
+      cp.onclick=()=>{ try{ ta.focus(); ta.select(); ta.setSelectionRange(0,value.length); }catch{} let ok=false; try{ ok=document.execCommand("copy"); }catch{} try{ navigator.clipboard&&navigator.clipboard.writeText&&navigator.clipboard.writeText(value); }catch{} alert(ok?"コピーしました。":"テキストを長押し→全選択→コピーして保存してください。"); };
+      cl.onclick=()=>back.remove();
+      row.appendChild(cp); row.appendChild(cl); back.appendChild(ta); back.appendChild(row);
+      (document.body||document.documentElement).appendChild(back);
+      try{ ta.focus(); ta.select(); }catch{}
     }
     wrap.addEventListener("click",(ev)=>{
       const t=ev.target;
       if(t.dataset.close){ location.href=baseUrl; return; }
       if(t.dataset.cur){ doRestore(cur); return; }
       if(t.dataset.idx!=null){ const b=backups[Number(t.dataset.idx)]; doRestore(b&&b.value); return; }
+      if(t.dataset.expcur){ exportValue(cur); return; }
+      if(t.dataset.exp!=null){ const b=backups[Number(t.dataset.exp)]; exportValue(b&&b.value); return; }
     });
     const mount=()=>{(document.body||document.documentElement).appendChild(wrap);};
     if(document.body)mount(); else window.addEventListener("DOMContentLoaded",mount);
