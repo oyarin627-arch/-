@@ -1,7 +1,7 @@
-// 各ページの描画。マイページ(容量)＋掲示板を実装。他は段階的に作る。
+// 各ページの描画。マイページ(容量)＋掲示板を実装。
+// 「タスク」は従来アプリを app.js が iframe 埋め込み（ここでは扱わない）。
 import { rawLegacy, readLegacyState, byteSize, fmtBytes } from "./store.js";
 export { renderBoard } from "./board.js";
-export { renderTasks } from "./tasks.js";
 
 function placeholder(el, title, note){
   el.innerHTML =
@@ -11,7 +11,8 @@ function placeholder(el, title, note){
 
 export function renderStudy(el){
   placeholder(el, "勉強",
-    "「タスク」と同じ仕様で、データだけ完全に別管理にします（普段のタスクと混ざりません）。");
+    "「タスク」と全く同じ画面・操作で、データだけ完全に別管理にします（普段のタスクと混ざりません）。" +
+    "従来アプリを“別の保存先”で埋め込む方式で用意します（次段）。");
 }
 
 const DOC_LIMIT = 1048576; // Firestore 1ドキュメントの上限 = 1 MiB
