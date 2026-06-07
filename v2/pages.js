@@ -1,6 +1,7 @@
 // 各ページの描画。マイページ(容量)＋掲示板を実装。他は段階的に作る。
 import { rawLegacy, readLegacyState, byteSize, fmtBytes } from "./store.js";
 export { renderBoard } from "./board.js";
+export { renderTasks } from "./tasks.js";
 
 function placeholder(el, title, note){
   el.innerHTML =
@@ -8,10 +9,6 @@ function placeholder(el, title, note){
     `<p class="muted">${note || "このページはこれから作っていきます。"}</p></div>`;
 }
 
-export function renderTasks(el){
-  placeholder(el, "タスク",
-    "現行アプリ（/）のタスク機能を、ここに作り直していきます。完成・検証までは現行アプリをご利用ください。");
-}
 export function renderStudy(el){
   placeholder(el, "勉強",
     "「タスク」と同じ仕様で、データだけ完全に別管理にします（普段のタスクと混ざりません）。");
