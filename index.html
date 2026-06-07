@@ -953,6 +953,32 @@ lucide-react/dist/esm/lucide-react.js:
     try{ document.execCommand("insertText",false,text); }catch{}
   },true);   // capture段階で先取り
 
+  // ② メモの「太字」をどの文字サイズでも効くようにする。
+  //   アプリ既定の太字は CSS の font-weight スパンで、文字サイズの <font> タグと相性が悪く
+  //   (iOS/Safari)「Lサイズしか太字にできない／サイズ変更で太字が外れる」状態だった。
+  //   そこで太字ボタンを横取りし、意味タグ <b>(styleWithCSS=false)で適用する。<b> は <font size> と
+  //   きれいに入れ子になり、queryCommandState でも確実に検出されるため、状態表示(B)も保たれる。
+  let memoSavedRange=null;
+  const inNoteSel=(sel)=>{ const ed=document.querySelector(".note-editor"); return ed && sel && sel.rangeCount && ed.contains(sel.anchorNode); };
+  document.addEventListener("pointerdown",(ev)=>{
+    if(!(ev.target.closest && ev.target.closest('[title="太字"]'))) return;
+    const sel=document.getSelection&&document.getSelection();
+    if(inNoteSel(sel)) memoSavedRange=sel.getRangeAt(0).cloneRange();   // 選択範囲を控える
+    ev.preventDefault();   // ボタンへフォーカス移動させず、エディタの選択を保持
+  },true);
+  document.addEventListener("click",(ev)=>{
+    const b=ev.target.closest && ev.target.closest('[title="太字"]');
+    if(!b) return;
+    ev.preventDefault(); ev.stopPropagation();   // アプリ既定の太字(CSSスパン)を止めて、こちらで<b>を適用
+    const ed=document.querySelector(".note-editor"); if(!ed) return;
+    try{
+      ed.focus();
+      if(memoSavedRange){ const sel=document.getSelection(); sel.removeAllRanges(); sel.addRange(memoSavedRange); }
+      document.execCommand("styleWithCSS",false,false);   // ← CSSではなく<b>タグで太字にする(サイズと共存)
+      document.execCommand("bold",false,null);
+    }catch(e){ console.warn("[memo] 太字の適用に失敗:",e); }
+  },true);   // capture段階で先取り
+
   // ====== ゴミ箱の複数選択削除(iOS風)。アプリ本体はミニファイ済みのため、ここから上乗せ実装 ======
   if(!RECOVER){
     const TRASH_TITLE="ゴミ箱";
