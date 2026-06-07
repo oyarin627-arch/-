@@ -530,8 +530,15 @@ lucide-react/dist/esm/lucide-react.js:
   // ---- アプリ本体(ミニファイ済み)へCSSを上乗せして表示・操作性を調整 ----
   (function injectCSS(){
     const css=
-      "/* ① プロジェクト詳細の下部「タスクを追加」バーを隠す(下中央のボタンに一本化) */\n"+
-      ".ta-add-bar-quick{ display:none !important; }\n"+
+      "/* ③ プロジェクト詳細の下部「タスクを追加」バーだけを隠す(下中央の青ボタンに一本化)。\n"+
+      "   タスク一覧画面(.ta-splitではない)のバーは残す */\n"+
+      ".ta-split .ta-add-bar{ display:none !important; }\n"+
+      "/* ① メモの文字サイズ S:M:L:XL:XXL を 3:4:5:6:7 の均等な差にする */\n"+
+      ".note-editor font[size=\"1\"]{ font-size:15px !important; }\n"+
+      ".note-editor font[size=\"3\"]{ font-size:20px !important; }\n"+
+      ".note-editor font[size=\"4\"]{ font-size:25px !important; }\n"+
+      ".note-editor font[size=\"5\"]{ font-size:30px !important; }\n"+
+      ".note-editor font[size=\"7\"]{ font-size:35px !important; }\n"+
       "/* ④⑤ 並び替えの『ポチポチ』を確実に掴めるように(スクロールに奪われない)＆長押しで文字選択させない */\n"+
       ".ta-grip, .ta-card-grip{ touch-action:none !important; }\n"+
       ".ta-card, .ta-bin-proj, .ta-rail-card{ -webkit-user-select:none !important; user-select:none !important; -webkit-touch-callout:none !important; }\n"+
@@ -1030,7 +1037,9 @@ lucide-react/dist/esm/lucide-react.js:
 
     function refreshUI(){
       selBtn.style.display = trashViewVisible() ? "block" : "none";
-      addBtn.style.display = detailViewVisible() ? "block" : "none";
+      // ② メモ(.ta-memo-overlay)を開いている間は「タスクを追加」ボタンを隠す
+      const memoOpen=!!document.querySelector(".ta-memo-overlay");
+      addBtn.style.display = (detailViewVisible() && !memoOpen) ? "block" : "none";
     }
     const mo=new MutationObserver(()=>{ clearTimeout(refreshUI._t); refreshUI._t=setTimeout(refreshUI,80); });
     const startMO=()=>{ try{ mo.observe(document.body,{childList:true,subtree:true}); }catch{} refreshUI(); };
