@@ -558,6 +558,8 @@ lucide-react/dist/esm/lucide-react.js:
       "/* ③ プロジェクト詳細の下部「タスクを追加」バーだけを隠す(下中央の青ボタンに一本化)。\n"+
       "   タスク一覧画面(.ta-splitではない)のバーは残す */\n"+
       ".ta-split .ta-add-bar{ display:none !important; }\n"+
+      "/* ⑤ タスク一覧のインライン・クイック追加欄を隠す(『タスクを追加』ボタンに一本化。欄はDOMに残し駆動に使う) */\n"+
+      ".ta-add-bar-quick{ display:none !important; }\n"+
       "/* ① メモの文字サイズ S:M:L:XL:XXL を 3:4:5:6:7 の均等な差にする */\n"+
       ".note-editor font[size=\"1\"]{ font-size:15px !important; }\n"+
       ".note-editor font[size=\"3\"]{ font-size:20px !important; }\n"+
@@ -1042,6 +1044,8 @@ lucide-react/dist/esm/lucide-react.js:
       return cards.findIndex(el=>el.classList.contains("ta-rail-active"));
     }
     const detailViewVisible=()=>activeRailIndex()>=0;
+    // 「タスク一覧」表示中か(=インボックスのクイック追加欄が存在する。CSSで隠していてもDOMには在る)
+    const listViewVisible=()=> !!document.querySelector(".ta-add-bar-quick");
     // 詳細画面で開いている対象プロジェクトを特定(レールの並び=有効プロジェクトの並びと一致)
     function currentProject(st){
       const list=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&!p.deleted&&!p.completed):[];
@@ -1058,7 +1062,7 @@ lucide-react/dist/esm/lucide-react.js:
     addBtn.style.cssText="position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:99998;"+
       "font:600 16px/1 -apple-system,system-ui,sans-serif;color:#fff;background:#007aff;border:0;"+
       "padding:14px 28px;border-radius:24px;box-shadow:0 3px 12px rgba(0,0,0,.3);display:none;";
-    addBtn.addEventListener("click",openTaskComposer);
+    addBtn.addEventListener("click",()=>{ if(detailViewVisible()) openComposer({mode:"project"}); else if(listViewVisible()) openComposer({mode:"inbox"}); });
     const mountAdd=()=>{ (document.body||document.documentElement).appendChild(addBtn); };
     if(document.body)mountAdd(); else window.addEventListener("DOMContentLoaded",mountAdd);
 
@@ -1066,7 +1070,8 @@ lucide-react/dist/esm/lucide-react.js:
       selBtn.style.display = trashViewVisible() ? "block" : "none";
       // ② メモ(.ta-memo-overlay)を開いている間は「タスクを追加」ボタンを隠す
       const memoOpen=!!document.querySelector(".ta-memo-overlay");
-      addBtn.style.display = (detailViewVisible() && !memoOpen) ? "block" : "none";
+      // ⑤ プロジェクト詳細だけでなく「タスク一覧」でも「タスクを追加」ボタンを表示
+      addBtn.style.display = ((detailViewVisible() || listViewVisible()) && !memoOpen) ? "block" : "none";
     }
     const mo=new MutationObserver(()=>{ clearTimeout(refreshUI._t); refreshUI._t=setTimeout(refreshUI,80); });
     const startMO=()=>{ try{ mo.observe(document.body,{childList:true,subtree:true}); }catch{} refreshUI(); };
@@ -1148,61 +1153,160 @@ lucide-react/dist/esm/lucide-react.js:
       if(!t.trim()) return "";
       return t.split("\n").map(line=>"<div>"+(escH(line)||"<br>")+"</div>").join("");   // アプリのメモはHTML。改行を<div>で保持
     }
-    function openTaskComposer(){
+    // 入力欄(React制御)へ値を入れて変更を通知するための native setter
+    function setNativeValue(el,val){
+      try{ const d=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),"value"); if(d&&d.set){ d.set.call(el,val); return; } }catch{}
+      el.value=val;
+    }
+    // 状態全体を走査してタスク風オブジェクトのidを集める/特定する(インボックスの保存場所に依存しない)
+    function collectTaskIds(o,set){ set=set||new Set();
+      if(!o||typeof o!=="object") return set;
+      if(Array.isArray(o)){ o.forEach(x=>collectTaskIds(x,set)); return set; }
+      if(o.id!=null && ("text" in o || "subtasks" in o)) set.add(o.id);
+      for(const k in o) collectTaskIds(o[k],set);
+      return set;
+    }
+    function findTaskById(o,id){
+      if(!o||typeof o!=="object") return null;
+      if(Array.isArray(o)){ for(const x of o){ const r=findTaskById(x,id); if(r) return r; } return null; }
+      if(o.id===id && ("text" in o || "subtasks" in o)) return o;
+      for(const k in o){ const r=findTaskById(o[k],id); if(r) return r; }
+      return null;
+    }
+    // インボックスへ追加: アプリ自身のクイック追加欄を駆動(保存場所を推測しない)。期限/メモは追加後に差分で特定して付与
+    function addToInbox(text,date,memo){
+      const bar=document.querySelector(".ta-add-bar-quick");
+      const input=bar&&bar.querySelector("input");
+      if(!input){ alert("「タスク一覧」を開いてからお試しください。"); return; }
+      const before=collectTaskIds(readState());
+      setNativeValue(input,text);
+      input.dispatchEvent(new Event("input",{bubbles:true}));
+      let tries=0;
+      (function go(){
+        const pill=bar.querySelector("button.ta-pill");           // 追加ピル出現=React反映の合図
+        if(pill){ pill.click(); afterAdd(); return; }
+        if(tries++<40){ setTimeout(go,50); return; }
+        input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,which:13,bubbles:true})); afterAdd();
+      })();
+      function afterAdd(){
+        if(!date && !memo) return;                                 // 内容のみ→アプリが即反映済み(リロード不要)
+        let t2=0;
+        (function patch(){
+          const stt=readState(); const after=collectTaskIds(stt);
+          let nid=null; after.forEach(id=>{ if(!before.has(id)) nid=id; });
+          const t=nid?findTaskById(stt,nid):null;
+          if(t){
+            if(date) t.deadline=date; if(memo) t.memo=memo;
+            try{ backup("before-inbox-meta",localStorage.getItem(STORAGE_KEY)); }catch{}
+            try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(stt)); }catch(e){}
+            location.reload();   // 期限/メモを画面へ反映(＋同期)
+            return;
+          }
+          if(t2++<40) setTimeout(patch,50);
+        })();
+      }
+    }
+
+    // 内容＋期限＋メモをまとめて追加。mode:"project"(現在のプロジェクト固定) / "inbox"(タスク一覧。既定インボックス＋追加先選択可)
+    function openComposer(opts){
+      opts=opts||{};
       const st=readState();
-      const proj=currentProject(st);
-      if(!proj){ alert("追加先のプロジェクトが特定できませんでした。プロジェクトを開いてからお試しください。"); return; }
+      const projects=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&!p.deleted&&!p.completed):[];
+      let dest;
+      if(opts.mode==="project"){
+        const proj=currentProject(st);
+        if(!proj){ alert("追加先のプロジェクトが特定できませんでした。プロジェクトを開いてからお試しください。"); return; }
+        dest={type:"project",id:proj.id,emoji:proj.emoji,name:proj.name};
+      } else { dest={type:"inbox"}; }
+      const pickable = opts.mode!=="project";
 
       const ov=document.createElement("div");
-      ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);"+
-        "display:flex;flex-direction:column;justify-content:flex-end;font:15px/1.5 -apple-system,system-ui,sans-serif;";
+      ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);display:flex;flex-direction:column;justify-content:flex-end;font:15px/1.5 -apple-system,system-ui,sans-serif;";
       const sheet=document.createElement("div");
-      sheet.style.cssText="background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:90vh;"+
-        "display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+      sheet.style.cssText="background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
       const fld="width:100%;box-sizing:border-box;border:0;border-radius:10px;background:#fff;padding:13px 14px;font-size:16px;color:#111;";
-      sheet.innerHTML=
-        `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;flex:none">`+
-          `<button data-act="cancel" style="background:none;border:0;color:#007aff;font-size:16px;padding:4px 2px">キャンセル</button>`+
-          `<b style="font-size:16px">新規タスク</b>`+
-          `<button data-act="add" style="background:none;border:0;color:#007aff;font-size:16px;font-weight:700;padding:4px 2px">追加</button>`+
-        `</div>`+
-        `<div style="overflow:auto;-webkit-overflow-scrolling:touch;padding:4px 16px 16px;display:flex;flex-direction:column;gap:14px">`+
-          `<div style="color:#8e8e93;font-size:13px;margin-top:2px">追加先：${escH(proj.emoji||"📁")} ${escH(proj.name||"(無題)")}</div>`+
-          `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">内容</div>`+
-            `<input data-f="text" type="text" placeholder="タスクの内容" style="${fld}"></div>`+
-          `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">期限（任意）</div>`+
-            `<input data-f="date" type="date" style="${fld}"></div>`+
-          `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">メモ（任意）</div>`+
-            `<textarea data-f="memo" rows="4" placeholder="メモを入力…" style="${fld}resize:vertical;min-height:96px;line-height:1.5"></textarea></div>`+
-        `</div>`;
-      ov.appendChild(sheet);
-
+      const destLabel=()=> dest.type==="inbox" ? "📥 インボックス（あとで分類）" : (escH(dest.emoji||"📁")+" "+escH(dest.name||"(無題)"));
+      const destRow=()=> pickable
+        ? `<button data-act="dest" style="text-align:left;background:#fff;border:0;border-radius:10px;padding:11px 14px;color:#111;font-size:15px"><span style="color:#8e8e93">追加先：</span>${destLabel()} <span style="color:#007aff">▾</span></button>`
+        : `<div style="color:#8e8e93;font-size:13px;margin-top:2px">追加先：${destLabel()}</div>`;
+      function paint(){
+        sheet.innerHTML=
+          `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;flex:none">`+
+            `<button data-act="cancel" style="background:none;border:0;color:#007aff;font-size:16px;padding:4px 2px">キャンセル</button>`+
+            `<b style="font-size:16px">新規タスク</b>`+
+            `<button data-act="add" style="background:none;border:0;color:#007aff;font-size:16px;font-weight:700;padding:4px 2px">追加</button>`+
+          `</div>`+
+          `<div style="overflow:auto;-webkit-overflow-scrolling:touch;padding:4px 16px 16px;display:flex;flex-direction:column;gap:14px">`+
+            destRow()+
+            `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">内容</div><input data-f="text" type="text" placeholder="タスクの内容" style="${fld}"></div>`+
+            `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">期限（任意）</div><input data-f="date" type="date" style="${fld}"></div>`+
+            `<div><div style="font-size:13px;color:#8e8e93;margin:0 2px 5px">メモ（任意）</div><textarea data-f="memo" rows="4" placeholder="メモを入力…" style="${fld}resize:vertical;min-height:96px;line-height:1.5"></textarea></div>`+
+          `</div>`;
+      }
       const getF=(n)=>sheet.querySelector('[data-f="'+n+'"]');
+      let keep={text:"",date:"",memo:""};
+      const snapshot=()=>{ keep={text:getF("text").value,date:getF("date").value,memo:getF("memo").value}; };
+      const restore=()=>{ getF("text").value=keep.text; getF("date").value=keep.date; getF("memo").value=keep.memo; };
+      function bindFields(){ getF("text").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); getF("date").focus(); } }); }
+
+      function chooseDest(){
+        snapshot();
+        const ov2=document.createElement("div");
+        ov2.style.cssText="position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.35);display:flex;flex-direction:column;justify-content:flex-end;font:15px/1.5 -apple-system,system-ui,sans-serif;";
+        const sh=document.createElement("div");
+        sh.style.cssText="background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+        const rowCss="display:flex;align-items:center;gap:12px;padding:13px 16px;background:#fff;border-bottom:1px solid #e5e5ea;cursor:pointer;font-size:16px";
+        let rows=`<div data-pick="inbox" style="${rowCss}"><span style="font-size:22px">📥</span><span>インボックス（あとで分類）</span></div>`;
+        projects.forEach(p=>{ rows+=`<div data-pick="${p.id}" style="${rowCss}"><span style="font-size:22px">${escH(p.emoji||"📁")}</span><span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escH(p.name||"(無題)")}</span></div>`; });
+        sh.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px"><b style="font-size:16px">追加先を選択</b><button data-act="x" style="background:none;border:0;color:#007aff;font-size:16px">閉じる</button></div><div style="overflow:auto;-webkit-overflow-scrolling:touch;border-top:1px solid #e5e5ea">${rows}</div>`;
+        ov2.appendChild(sh);
+        sh.addEventListener("click",(ev)=>{
+          const r=ev.target.closest("[data-pick]");
+          if(r){ const v=r.getAttribute("data-pick");
+            if(v==="inbox") dest={type:"inbox"}; else { const p=projects.find(q=>q.id===v); if(p) dest={type:"project",id:p.id,emoji:p.emoji,name:p.name}; }
+            ov2.remove(); paint(); restore(); bindFields(); return;
+          }
+          if(ev.target.closest('[data-act="x"]')) ov2.remove();
+        });
+        ov2.addEventListener("click",(ev)=>{ if(ev.target===ov2) ov2.remove(); });
+        (document.body||document.documentElement).appendChild(ov2);
+      }
+
       function submit(){
         const text=(getF("text").value||"").trim();
         if(!text){ getF("text").focus(); return; }
         const date=(getF("date").value||"").trim();
         const memo=textToMemoHTML(getF("memo").value);
-        const fresh=readState();
-        if(!fresh||!Array.isArray(fresh.projects)){ alert("追加に失敗しました(データ未取得)。"); return; }
-        const target=fresh.projects.find(p=>p&&p.id===proj.id) || currentProject(fresh);
-        if(!target){ alert("追加先のプロジェクトが見つかりませんでした。"); return; }
-        target.tasks=Array.isArray(target.tasks)?target.tasks:[];
-        target.tasks.push({id:newId(),text,done:false,deadline:date||null,memo,subtasks:[]});
-        try{ backup("before-add-task",localStorage.getItem(STORAGE_KEY)); }catch{}
-        try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }
-        catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
-        ov.remove();
-        try{ sessionStorage.setItem("taskapp-reopen", proj.id); }catch{}   // ④ リロード後に同じプロジェクトへ戻す
-        location.reload();   // 追加を画面に反映(リロード後にクラウドへ同期)
+        if(dest.type==="project"){
+          const fresh=readState();
+          if(!fresh||!Array.isArray(fresh.projects)){ alert("追加に失敗しました(データ未取得)。"); return; }
+          const target=fresh.projects.find(p=>p&&p.id===dest.id);
+          if(!target){ alert("追加先のプロジェクトが見つかりませんでした。"); return; }
+          target.tasks=Array.isArray(target.tasks)?target.tasks:[];
+          target.tasks.push({id:newId(),text,done:false,deadline:date||null,memo,subtasks:[]});
+          try{ backup("before-add-task",localStorage.getItem(STORAGE_KEY)); }catch{}
+          try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
+          ov.remove();
+          try{ sessionStorage.setItem("taskapp-reopen", dest.id); }catch{}   // ④ 追加後にそのプロジェクトを開く
+          location.reload();
+        } else {
+          ov.remove();
+          addToInbox(text, date||null, memo);   // インボックス: アプリのクイック追加を駆動
+        }
       }
+
+      paint();
+      ov.appendChild(sheet);
       sheet.addEventListener("click",(ev)=>{
         const act=ev.target.closest("[data-act]"); if(!act) return;
-        if(act.getAttribute("data-act")==="cancel") ov.remove(); else submit();
+        const a=act.getAttribute("data-act");
+        if(a==="cancel") ov.remove();
+        else if(a==="dest") chooseDest();
+        else if(a==="add") submit();
       });
-      getF("text").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); getF("date").focus(); } });
       ov.addEventListener("click",(ev)=>{ if(ev.target===ov) ov.remove(); });
       (document.body||document.documentElement).appendChild(ov);
+      bindFields();
       try{ getF("text").focus(); }catch{}
     }
   }
