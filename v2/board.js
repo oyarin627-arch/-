@@ -90,10 +90,10 @@ function draw(){
   const blocks = active.filter(b => b.kind !== "cd");    // 通常ブロック
   mountEl.innerHTML = `
     <div class="board-bar">
-      <button class="btn btn-blue" id="b-add">＋ ブロックを追加</button>
-      <button class="btn-ghost" id="b-add-cd">⏳ カウントダウン</button>
+      <button class="btn-ghost" id="b-add">＋ポスター</button>
+      <button class="btn-ghost" id="b-add-cd">＋カウントダウン</button>
       <span class="spacer"></span>
-      <button class="btn-ghost" id="b-arch">🗄 アーカイブ</button>
+      <button class="btn-ghost" id="b-arch">アーカイブ</button>
     </div>
     <div class="bcd-row" id="b-cds"></div>
     <div class="board ${reordering ? "reordering" : ""}" id="b-list"></div>
@@ -114,7 +114,7 @@ function draw(){
     banner.querySelector("#b-done").onclick = () => { reordering = false; setBusy(false); draw(); };
   }
   if(!blocks.length && !reordering){
-    list.insertAdjacentHTML("beforeend", `<div class="board-empty">まだブロックがありません。<br>「＋ ブロックを追加」で作成できます。</div>`);
+    list.insertAdjacentHTML("beforeend", `<div class="board-empty">まだポスターがありません。<br>「＋ポスター」で作成できます。</div>`);
   }
   blocks.forEach(b => list.appendChild(blockEl(b)));
   ensureTicker();

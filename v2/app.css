@@ -36,6 +36,7 @@ body{
 }
 .tab.active{ color:var(--blue); }
 .tab-icon{ font-size:21px; line-height:1; }
+.tab-icon svg{ width:25px; height:25px; display:block; }
 
 /* 埋め込みiframe(従来アプリ)。高さはJSでpx指定(iOSのdvh潰れ対策) */
 .embed-frame{

@@ -572,9 +572,29 @@ lucide-react/dist/esm/lucide-react.js:
       "/* ⑥ 左上のウインドウコントロール(•••)とUIが重ならないよう余白を確保 */\n"+
       ".ta-rail{ padding-top:56px !important; }\n"+
       ".ta-back{ margin-left:48px !important; }\n"+
-      ".ta-memo-head{ padding-left:52px !important; }\n";
+      ".ta-memo-head{ padding-left:52px !important; }\n"+
+      "/* ④ タスク/勉強ページのカウントダウンのコーナーを非表示にする(掲示板側のカウントダウンは残す) */\n"+
+      ".ta-cd-row{ display:none !important; }\n";
     const st=document.createElement("style"); st.textContent=css;
     (document.head||document.documentElement).appendChild(st);
+  })();
+
+  // ⑤ 期限/メモ付きのタスク追加でリロードする際、一瞬ホーム画面が見える「点滅」を覆い隠すフルスクリーンの幕。
+  //    リロード後に元の画面(プロジェクト詳細 or タスク一覧)へ戻し終えたら外す(load側で window.__taskHideCover を呼ぶ)。
+  (function mountAddCover(){
+    let need=false; try{ need=sessionStorage.getItem("taskapp-cover")==="1"; }catch{}
+    if(!need){ window.__taskHideCover=()=>{}; return; }
+    try{ sessionStorage.removeItem("taskapp-cover"); }catch{}
+    const cover=document.createElement("div");
+    cover.id="taskapp-add-cover";
+    cover.style.cssText="position:fixed;inset:0;z-index:100050;background:#f2f2f7;display:flex;align-items:center;justify-content:center;"+
+      "font:15px/1.5 -apple-system,system-ui,sans-serif;color:#8e8e93;transition:opacity .25s;opacity:1;";
+    cover.textContent="追加しています…";
+    const mount=()=>{ (document.body||document.documentElement).appendChild(cover); };
+    if(document.body)mount(); else window.addEventListener("DOMContentLoaded",mount);
+    let hidden=false;
+    window.__taskHideCover=()=>{ if(hidden)return; hidden=true; try{ cover.style.opacity="0"; setTimeout(()=>{ try{cover.remove();}catch{} },300); }catch{} };
+    setTimeout(()=>{ try{ window.__taskHideCover(); }catch{} }, 9000);   // 安全弁: 戻り処理が失敗しても固まらない
   })();
 
   const now=()=>Date.now();
@@ -1173,11 +1193,13 @@ lucide-react/dist/esm/lucide-react.js:
       for(const k in o){ const r=findTaskById(o[k],id); if(r) return r; }
       return null;
     }
-    // インボックスへ追加: アプリ自身のクイック追加欄を駆動(保存場所を推測しない)。期限/メモは追加後に差分で特定して付与
-    function addToInbox(text,date,memo){
-      const bar=document.querySelector(".ta-add-bar-quick");
+    // ⑤ クイック追加欄(プロジェクト詳細 .ta-add-bar / タスク一覧 .ta-add-bar-quick)を駆動してタスクを追加。
+    //    ・内容のみ → アプリが即反映。リロードしない＝画面が一切切り替わらない(最初の画面に戻らない)。
+    //    ・期限/メモあり → 追加後に新タスクを特定して付与し、リロード。その間は幕で点滅を隠し、元画面(reopen)へ戻す。
+    //    reopen: 戻り先。プロジェクトid、または "__tasklist__"(タスク一覧)。
+    function driveAdd(bar, text, date, memo, reopen){
       const input=bar&&bar.querySelector("input");
-      if(!input){ alert("「タスク一覧」を開いてからお試しください。"); return; }
+      if(!input){ alert("追加欄が見つかりませんでした。画面を開き直してお試しください。"); return; }
       const before=collectTaskIds(readState());
       setNativeValue(input,text);
       input.dispatchEvent(new Event("input",{bubbles:true}));
@@ -1189,7 +1211,7 @@ lucide-react/dist/esm/lucide-react.js:
         input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",keyCode:13,which:13,bubbles:true})); afterAdd();
       })();
       function afterAdd(){
-        if(!date && !memo) return;                                 // 内容のみ→アプリが即反映済み(リロード不要)
+        if(!date && !memo) return;                                 // 内容のみ→リロード不要(画面はそのまま)
         let t2=0;
         (function patch(){
           const stt=readState(); const after=collectTaskIds(stt);
@@ -1197,9 +1219,10 @@ lucide-react/dist/esm/lucide-react.js:
           const t=nid?findTaskById(stt,nid):null;
           if(t){
             if(date) t.deadline=date; if(memo) t.memo=memo;
-            try{ backup("before-inbox-meta",localStorage.getItem(STORAGE_KEY)); }catch{}
+            try{ backup("before-add-meta",localStorage.getItem(STORAGE_KEY)); }catch{}
             try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(stt)); }catch(e){}
-            location.reload();   // 期限/メモを画面へ反映(＋同期)
+            try{ sessionStorage.setItem("taskapp-reopen", reopen); sessionStorage.setItem("taskapp-cover","1"); }catch{}
+            location.reload();   // 期限/メモを画面へ反映(＋同期)。幕＋reopenで元画面へ戻す
             return;
           }
           if(t2++<40) setTimeout(patch,50);
@@ -1287,7 +1310,17 @@ lucide-react/dist/esm/lucide-react.js:
         if(!text){ getF("text").focus(); return; }
         const date=(getF("date").value||"").trim();
         const memo=textToMemoHTML(getF("memo").value);
+        // ⑤ 戻り先 = コンポーザーを開いた画面(プロジェクト詳細 or タスク一覧)。タスクの保存先(dest)とは別。
+        const reopen = (opts.mode==="project") ? dest.id : "__tasklist__";
         if(dest.type==="project"){
+          // プロジェクト詳細を開いている場合は、その場の(隠した)クイック追加欄を駆動 → リロードせず画面そのまま
+          const bar = (opts.mode==="project") ? document.querySelector(".ta-split .ta-add-bar") : null;
+          if(bar && bar.querySelector("input")){
+            close();
+            driveAdd(bar, text, date, memo, reopen);
+            return;
+          }
+          // フォールバック(タスク一覧から特定プロジェクトを選んだ等、その場の追加欄が無い): 直接書き込み＋リロードで元画面へ戻す
           const fresh=readState();
           if(!fresh||!Array.isArray(fresh.projects)){ alert("追加に失敗しました(データ未取得)。"); return; }
           const target=fresh.projects.find(p=>p&&p.id===dest.id);
@@ -1296,12 +1329,13 @@ lucide-react/dist/esm/lucide-react.js:
           target.tasks.push({id:newId(),text,done:false,deadline:date||null,memo,subtasks:[]});
           try{ backup("before-add-task",localStorage.getItem(STORAGE_KEY)); }catch{}
           try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
-          try{ sessionStorage.setItem("taskapp-reopen", dest.id); }catch{}   // ④ 追加後にそのプロジェクトを開く
+          try{ sessionStorage.setItem("taskapp-reopen", reopen); sessionStorage.setItem("taskapp-cover","1"); }catch{}
           close();
           location.reload();
         } else {
+          // タスク一覧(インボックス): アプリのクイック追加欄を駆動。内容のみはリロード無し
           close();
-          addToInbox(text, date||null, memo);   // インボックス: アプリのクイック追加を駆動
+          driveAdd(document.querySelector(".ta-add-bar-quick"), text, date||null, memo, reopen);
         }
       }
 
@@ -1329,31 +1363,44 @@ lucide-react/dist/esm/lucide-react.js:
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
     try{ const y=sessionStorage.getItem("taskapp-scroll"); if(y!=null){ window.scrollTo(0,Number(y)); sessionStorage.removeItem("taskapp-scroll"); } }catch{}
-    // ④ タスク追加でリロードした後、開いていたプロジェクト詳細へ自動で戻す(最初の画面に戻らない)
+    // ⑤ タスク追加でリロードした後、元の画面(開いていたプロジェクト詳細 or タスク一覧)へ自動で戻す(最初の画面に戻らない)
+    const hideCover=()=>{ try{ window.__taskHideCover&&window.__taskHideCover(); }catch{} };
     try{
-      const id=sessionStorage.getItem("taskapp-reopen");
-      if(id){
-        sessionStorage.removeItem("taskapp-reopen");
-        let st=null; try{ st=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null"); }catch{}
-        const list=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&!p.deleted&&!p.completed):[];
-        const idx=list.findIndex(p=>p&&p.id===id);
-        const name=idx>=0?list[idx].name:null;
-        if(idx>=0){
-          let tries=0;
-          (function loop(){
-            if(detailViewVisible()) return;   // ④ 詳細が開けたら終了(クリックが効いた)
-            // ホーム画面にレールは無い。プロジェクトカード(button.ta-card 内に .ta-card-name)をクリックして開く
-            const cards=[...document.querySelectorAll(".ta-card")].filter(c=>c.querySelector(".ta-card-name"));
-            if(cards.length){
-              let card = name ? cards.find(c=>{ const e=c.querySelector(".ta-card-name"); return e && e.textContent.trim()===name; }) : null;
-              if(!card && idx<cards.length) card = cards[idx];   // フォールバック(並び順)
-              if(card) card.click();   // 開くまで再試行(初期描画でクリックが失われても拾い直す)
-            }
-            if(tries++<60) setTimeout(loop,150);   // 最大~9秒
-          })();
-        }
+      const target=sessionStorage.getItem("taskapp-reopen");
+      if(!target){ hideCover(); return; }
+      sessionStorage.removeItem("taskapp-reopen");
+
+      if(target==="__tasklist__"){
+        // 「タスク一覧」へ戻す(ホームの『タスク一覧』カードをクリックして開く)
+        let tries=0;
+        (function loop(){
+          if(listViewVisible()){ hideCover(); return; }   // 一覧が開けたら終了
+          const tl=document.querySelector(".ta-tl-card");
+          if(tl) tl.click();
+          if(tries++<60) setTimeout(loop,150); else hideCover();   // 最大~9秒
+        })();
+        return;
       }
-    }catch(e){}
+
+      // プロジェクト詳細へ戻す
+      let st=null; try{ st=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null"); }catch{}
+      const list=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&!p.deleted&&!p.completed):[];
+      const idx=list.findIndex(p=>p&&p.id===target);
+      const name=idx>=0?list[idx].name:null;
+      if(idx<0){ hideCover(); return; }
+      let tries=0;
+      (function loop(){
+        if(detailViewVisible()){ hideCover(); return; }   // 詳細が開けたら終了(クリックが効いた)
+        // ホーム画面にレールは無い。プロジェクトカード(button.ta-card 内に .ta-card-name)をクリックして開く
+        const cards=[...document.querySelectorAll(".ta-card")].filter(c=>c.querySelector(".ta-card-name"));
+        if(cards.length){
+          let card = name ? cards.find(c=>{ const e=c.querySelector(".ta-card-name"); return e && e.textContent.trim()===name; }) : null;
+          if(!card && idx<cards.length) card = cards[idx];   // フォールバック(並び順)
+          if(card) card.click();   // 開くまで再試行(初期描画でクリックが失われても拾い直す)
+        }
+        if(tries++<60) setTimeout(loop,150); else hideCover();   // 最大~9秒
+      })();
+    }catch(e){ hideCover(); }
   });
 </script>
 </body>
