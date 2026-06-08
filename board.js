@@ -141,8 +141,7 @@ function blockEl(b){
     <div class="bblock" style="background:${col};border:1px solid ${shade(col,0.8)}">
       <button class="bblock-arch-btn" title="アーカイブ">✕</button>
       <button class="bblock-grip" title="ドラッグで並び替え">≡</button>
-      <div class="bblock-content"></div>
-      <div class="bblock-meta">${fmtTime(b.updatedAt || b.createdAt)}</div>
+      <div class="bblock-content"${b.lineHeight ? ` style="line-height:${b.lineHeight}"` : ""}></div>
     </div>`;
   wrap.querySelector(".bblock-content").innerHTML = b.html || "";
   const card = wrap.querySelector(".bblock");
@@ -318,6 +317,7 @@ function openEditor(block, opts){
   const isNew = !block;
   const data = block || { id:uid(), html:"", color:"#ffffff", createdAt:now() };
   let color = data.color || "#ffffff";
+  let lineHeight = data.lineHeight || 1.6;     // ④ 行間はポスター単位(行ごとではない)
   setBusy(true);
 
   const ov = document.createElement("div"); ov.className = "be-overlay";
@@ -334,6 +334,9 @@ function openEditor(block, opts){
         <button class="be-tool" data-cmd="bold" title="太字">B</button>
         <button class="be-tool" data-cmd="ul" title="箇条書き">•</button>
         <span class="be-divider"></span>
+        <button class="be-tool" data-cmd="left" title="左揃え">⬅</button>
+        <button class="be-tool" data-cmd="center" title="中央揃え">⬌</button>
+        <span class="be-divider"></span>
         ${TEXT_COLORS.map(c => `<span class="be-swatch" data-color="${c}" style="background:${c}"></span>`).join("")}
         <span class="be-divider"></span>
         <button class="be-tool" data-cmd="photo" title="写真">📷</button>
@@ -342,6 +345,9 @@ function openEditor(block, opts){
       <div class="be-appearance">
         <div class="row"><span class="label">ブロックの色</span></div>
         <div class="bswatch-grid" id="be-colors"></div>
+        <div class="row" style="margin-top:12px"><span class="label">行間</span>
+          <div class="be-seg" id="be-lh"></div>
+        </div>
         <div class="row" style="margin-top:10px"><span class="label">プレビュー</span>
           <span id="be-preview" style="flex:1;height:38px;border-radius:10px"></span>
         </div>
@@ -354,9 +360,22 @@ function openEditor(block, opts){
 
   const editor = ov.querySelector(".be-editor");
   editor.innerHTML = data.html || "";
+  editor.style.lineHeight = lineHeight;        // ④ 編集中も行間を反映
   const preview = ov.querySelector("#be-preview");
   const updatePreview = () => { preview.style.background = color; preview.style.border = "1px solid " + shade(color,0.8); };
   updatePreview();
+
+  // ④ 行間の選択(ポスター全体に適用)
+  const LH_OPTS = [{v:1.2,l:"狭い"},{v:1.6,l:"標準"},{v:2.0,l:"広い"},{v:2.6,l:"最大"}];
+  const lhWrap = ov.querySelector("#be-lh");
+  LH_OPTS.forEach(o => {
+    const s = document.createElement("button");
+    s.type = "button"; s.className = "be-seg-btn" + (Math.abs(o.v - lineHeight) < 0.01 ? " on" : "");
+    s.textContent = o.l; s.dataset.lh = o.v;
+    s.addEventListener("mousedown", e => e.preventDefault());
+    s.onclick = () => { lineHeight = o.v; editor.style.lineHeight = lineHeight; lhWrap.querySelectorAll(".be-seg-btn").forEach(x => x.classList.toggle("on", x === s)); };
+    lhWrap.appendChild(s);
+  });
 
   // ブロック色スウォッチ(大きめ・押しやすい)
   const colorsWrap = ov.querySelector("#be-colors");
@@ -380,6 +399,8 @@ function openEditor(block, opts){
       if(btn.dataset.size) exec("fontSize", String(btn.dataset.size), false);
       else if(btn.dataset.cmd === "bold") exec("bold", null, false);
       else if(btn.dataset.cmd === "ul") exec("insertUnorderedList", null, false);
+      else if(btn.dataset.cmd === "left") exec("justifyLeft", null, true);      // ③ 左揃え
+      else if(btn.dataset.cmd === "center") exec("justifyCenter", null, true);  // ③ 中央揃え
       else if(btn.dataset.cmd === "photo") pickPhoto(editor);
     });
   });
@@ -389,15 +410,19 @@ function openEditor(block, opts){
 
   // ② 選択中の整形(サイズ/太字/箇条書き)をボタンの青で示す
   function updateToolbarState(){
-    let bold=false, ul=false, sizeVal="";
+    let bold=false, ul=false, sizeVal="", center=false, left=false;
     try{ bold = document.queryCommandState("bold"); }catch{}
     try{ ul = document.queryCommandState("insertUnorderedList"); }catch{}
     try{ sizeVal = String(document.queryCommandValue("fontSize") || ""); }catch{}
+    try{ center = document.queryCommandState("justifyCenter"); }catch{}
+    try{ left = document.queryCommandState("justifyLeft"); }catch{}
     ov.querySelectorAll(".be-tool").forEach(btn => {
       let on = false;
       if(btn.dataset.size) on = (btn.dataset.size === sizeVal);
       else if(btn.dataset.cmd === "bold") on = bold;
       else if(btn.dataset.cmd === "ul") on = ul;
+      else if(btn.dataset.cmd === "center") on = center;
+      else if(btn.dataset.cmd === "left") on = left && !center;
       btn.classList.toggle("on", on);
     });
   }
@@ -410,7 +435,7 @@ function openEditor(block, opts){
 
   ov.querySelector('[data-act="cancel"]').onclick = close;
   ov.querySelector('[data-act="save"]').onclick = () => {
-    data.html = editor.innerHTML; data.color = color; data.updatedAt = now();
+    data.html = editor.innerHTML; data.color = color; data.lineHeight = lineHeight; data.updatedAt = now();
     if("alpha" in data) delete data.alpha;          // 旧データの透明度は破棄
     if(isNew) state.blocks.unshift(data);
     else { const i = state.blocks.findIndex(x => x.id === data.id); if(i>=0) state.blocks[i] = data; }

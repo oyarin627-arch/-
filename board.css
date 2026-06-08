@@ -71,6 +71,10 @@
 .be-appearance{ padding:10px 14px; border-top:1px solid var(--sep); }
 .be-appearance .row{ display:flex; align-items:center; gap:10px; margin:6px 0; flex-wrap:wrap; }
 .be-appearance .label{ font-size:13px; color:var(--muted); min-width:64px; }
+/* ④ 行間のセグメント(ポスター単位) */
+.be-seg{ display:flex; gap:6px; flex:1; flex-wrap:wrap; }
+.be-seg-btn{ border:1px solid var(--sep); background:#fff; color:var(--text); border-radius:8px; padding:7px 12px; font-size:14px; font-weight:600; cursor:pointer; }
+.be-seg-btn.on{ background:var(--blue); color:#fff; border-color:var(--blue); }
 /* ブロック色スウォッチ(大きめ・押しやすい四角) */
 .bswatch-grid{ display:flex; flex-wrap:wrap; gap:10px; margin-top:6px; }
 .be-bswatch{ width:42px; height:42px; border-radius:10px; border:1px solid var(--sep); cursor:pointer; padding:0; }

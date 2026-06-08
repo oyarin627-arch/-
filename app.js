@@ -64,6 +64,16 @@ function currentId(){
   return PAGES.some(p => p.id === h) ? h : DEFAULT_PAGE;
 }
 
+// ② 掲示板はタイトルの代わりに今日の日付を表示(例: 6月8日（日）)
+function todayLabel(){
+  const d = new Date();
+  const wd = "日月火水木金土"[d.getDay()];
+  return `${d.getMonth()+1}月${d.getDate()}日（${wd}）`;
+}
+function pageHeaderText(page){
+  return page.id === "board" ? todayLabel() : page.label;
+}
+
 function navigate(){
   const id = currentId();
   const page = PAGES.find(p => p.id === id);
@@ -79,7 +89,7 @@ function navigate(){
   if(page.embed){
     content.innerHTML = "";
   } else {
-    titleEl.textContent = page.label;
+    titleEl.textContent = pageHeaderText(page);
     content.innerHTML = ""; content.scrollTop = 0;
     try{ page.render(content); }
     catch(e){ content.innerHTML = `<div class="card"><p>表示エラー: ${String(e && e.message || e)}</p></div>`; }
