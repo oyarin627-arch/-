@@ -1,5 +1,5 @@
-// 新アプリ(再構築版)の起動とページ切替。ビルド不要のESモジュール。
-// 「タスク」タブは従来アプリ(/index.html)をそのまま iframe 埋め込み
+// アプリの起動とページ切替。ビルド不要のESモジュール。
+// 「タスク」タブは従来アプリ(app.html)をそのまま iframe 埋め込み
 //  → 見た目・操作性・同期を従来と完全に同一に保つ。
 import { renderBoard, renderMyPage } from "./pages.js";
 
@@ -15,8 +15,8 @@ const ICONS = {
 //  embed: 従来アプリをiframeで埋め込むページ / render: v2で描画するページ
 const PAGES = [
   { id:"board",  label:"掲示板",     icon:ICONS.board,  render:renderBoard },
-  { id:"tasks",  label:"タスク",     icon:ICONS.tasks,  embed:"../index.html" },
-  { id:"study",  label:"勉強",       icon:ICONS.study,  embed:"../index.html?ns=study" },
+  { id:"tasks",  label:"タスク",     icon:ICONS.tasks,  embed:"app.html" },
+  { id:"study",  label:"勉強",       icon:ICONS.study,  embed:"app.html?ns=study" },
   { id:"mypage", label:"マイページ", icon:ICONS.mypage, render:renderMyPage },
 ];
 const DEFAULT_PAGE = "tasks";
