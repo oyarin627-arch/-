@@ -31,6 +31,31 @@ function shade(hex, f){
   return `rgb(${r},${g},${b})`;
 }
 const fmtTime = t => { try{ return new Date(t).toLocaleString(); }catch{ return ""; } };
+// カウントダウン: 目標日時の表示と残り時間
+const cdFmt = ts => { try{ return new Date(ts).toLocaleString([], {year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}); }catch{ return ""; } };
+function countdownText(target){
+  const t = new Date(target).getTime();
+  if(isNaN(t)) return "";
+  let diff = t - Date.now();
+  const past = diff < 0; diff = Math.abs(diff);
+  const d = Math.floor(diff/86400000);
+  const h = Math.floor(diff%86400000/3600000);
+  const m = Math.floor(diff%3600000/60000);
+  const s = Math.floor(diff%60000/1000);
+  const main = d>0 ? `${d}日 ${h}時間${m}分` : `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  return past ? `${main} 経過` : `あと ${main}`;
+}
+// 表示中のカウントダウンを毎秒更新
+let cdTimer = null;
+function refreshCd(){
+  if(!mountEl) return;
+  mountEl.querySelectorAll("[data-cd]").forEach(el => { el.textContent = countdownText(el.getAttribute("data-cd")); });
+}
+function ensureTicker(){
+  const has = mountEl && mountEl.querySelector("[data-cd]");
+  if(has){ if(!cdTimer) cdTimer = setInterval(refreshCd, 1000); refreshCd(); }
+  else if(cdTimer){ clearInterval(cdTimer); cdTimer = null; }
+}
 
 let state = load();
 let mountEl = null;
@@ -70,12 +95,14 @@ function draw(){
   mountEl.innerHTML = `
     <div class="board-bar">
       <button class="btn btn-blue" id="b-add">＋ ブロックを追加</button>
+      <button class="btn-ghost" id="b-add-cd">⏳ カウントダウン</button>
       <span class="spacer"></span>
       <button class="btn-ghost" id="b-arch">🗄 アーカイブ</button>
     </div>
     <div class="board ${reordering ? "reordering" : ""}" id="b-list"></div>
   `;
   mountEl.querySelector("#b-add").onclick = () => openEditor(null);
+  mountEl.querySelector("#b-add-cd").onclick = () => openEditor(null, { focusCd:true });
   mountEl.querySelector("#b-arch").onclick = () => { view = "archive"; reordering = false; draw(); };
 
   const list = mountEl.querySelector("#b-list");
@@ -90,6 +117,7 @@ function draw(){
     list.insertAdjacentHTML("beforeend", `<div class="board-empty">まだブロックがありません。<br>「＋ ブロックを追加」で作成できます。</div>`);
   }
   blocks.forEach(b => list.appendChild(blockEl(b)));
+  ensureTicker();
 }
 
 function blockColor(b){ return b.color || "#ffffff"; }
@@ -106,6 +134,7 @@ function blockEl(b){
     <div class="bblock" style="background:${col};border:1px solid ${shade(col,0.8)}">
       <button class="bblock-arch-btn" title="アーカイブ">✕</button>
       <button class="bblock-grip" title="ドラッグで並び替え">≡</button>
+      ${b.countdown ? `<div class="bblock-cd"><span class="bblock-cd-val" data-cd="${b.countdown}">${countdownText(b.countdown)}</span><span class="bblock-cd-sub">🎯 ${cdFmt(b.countdown)}</span></div>` : ""}
       <div class="bblock-content"></div>
       <div class="bblock-meta">${fmtTime(b.updatedAt || b.createdAt)}</div>
     </div>`;
@@ -234,6 +263,7 @@ function drawArchive(){
     </div>
     <div class="board" id="a-list"></div>`;
   mountEl.querySelector("#a-back").onclick = () => { view = "board"; draw(); };
+  ensureTicker();   // アーカイブにはカウントダウン表示が無いのでタイマー停止
   const list = mountEl.querySelector("#a-list");
   if(!arch.length){ list.innerHTML = `<div class="board-empty">アーカイブは空です。</div>`; return; }
   arch.forEach(b => {
@@ -257,7 +287,8 @@ function drawArchive(){
 }
 
 /* ---- 編集シート(メモと同じ文字編集 + 色 + 写真) ---- */
-function openEditor(block){
+function openEditor(block, opts){
+  opts = opts || {};
   const isNew = !block;
   const data = block || { id:uid(), html:"", color:"#ffffff", createdAt:now() };
   let color = data.color || "#ffffff";
@@ -288,6 +319,12 @@ function openEditor(block){
         <div class="row" style="margin-top:10px"><span class="label">プレビュー</span>
           <span id="be-preview" style="flex:1;height:38px;border-radius:10px"></span>
         </div>
+        <div class="row" style="margin-top:14px"><span class="label">⏳ カウントダウン</span></div>
+        <div class="be-cd-row">
+          <input type="datetime-local" class="be-cd-input" />
+          <button type="button" class="btn-ghost be-cd-clear">クリア</button>
+        </div>
+        <div class="be-cd-hint">目標日時を設定すると、ブロックに残り時間が表示されます（任意）。</div>
       </div>
       <div class="be-foot">
         ${isNew ? "" : `<button class="btn btn-arch" data-act="archive">アーカイブ</button>`}
@@ -300,6 +337,10 @@ function openEditor(block){
   const preview = ov.querySelector("#be-preview");
   const updatePreview = () => { preview.style.background = color; preview.style.border = "1px solid " + shade(color,0.8); };
   updatePreview();
+
+  const cdInput = ov.querySelector(".be-cd-input");
+  if(data.countdown) cdInput.value = data.countdown;
+  ov.querySelector(".be-cd-clear").onclick = () => { cdInput.value = ""; };
 
   // ブロック色スウォッチ(大きめ・押しやすい)
   const colorsWrap = ov.querySelector("#be-colors");
@@ -354,6 +395,8 @@ function openEditor(block){
   ov.querySelector('[data-act="cancel"]').onclick = close;
   ov.querySelector('[data-act="save"]').onclick = () => {
     data.html = editor.innerHTML; data.color = color; data.updatedAt = now();
+    const cdv = cdInput.value;                        // カウントダウン目標日時(任意)
+    if(cdv) data.countdown = cdv; else if("countdown" in data) delete data.countdown;
     if("alpha" in data) delete data.alpha;          // 旧データの透明度は破棄
     if(isNew) state.blocks.unshift(data);
     else { const i = state.blocks.findIndex(x => x.id === data.id); if(i>=0) state.blocks[i] = data; }
@@ -362,7 +405,11 @@ function openEditor(block){
   const archBtn = ov.querySelector('[data-act="archive"]');
   if(archBtn) archBtn.onclick = () => { close(); archive(data.id); };
 
-  setTimeout(() => { editor.focus(); updateToolbarState(); }, 30);
+  setTimeout(() => {
+    if(opts.focusCd){ try{ cdInput.focus(); cdInput.scrollIntoView({block:"center"}); if(cdInput.showPicker) cdInput.showPicker(); }catch{} }
+    else editor.focus();
+    updateToolbarState();
+  }, 30);
 }
 
 /* 写真: 圧縮して挿入 */

@@ -1221,9 +1221,19 @@ lucide-react/dist/esm/lucide-react.js:
       const pickable = opts.mode!=="project";
 
       const ov=document.createElement("div");
-      ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);display:flex;flex-direction:column;justify-content:flex-end;font:15px/1.5 -apple-system,system-ui,sans-serif;";
+      ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);font:15px/1.5 -apple-system,system-ui,sans-serif;";
       const sheet=document.createElement("div");
-      sheet.style.cssText="background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+      // ② シートは visualViewport(キーボード除く可視領域)の下端へアンカー。オートフォーカス時に上へ突き抜けない
+      sheet.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:100002;background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+      const vv=window.visualViewport;
+      function place(){
+        if(vv){
+          const gap=Math.max(0, window.innerHeight-(vv.offsetTop+vv.height));   // キーボード等の下端余白
+          sheet.style.bottom=gap+"px";
+          sheet.style.maxHeight=(vv.height-8)+"px";
+        }
+      }
+      function close(){ try{ if(vv){ vv.removeEventListener("resize",place); vv.removeEventListener("scroll",place); } }catch{} ov.remove(); sheet.remove(); }
       const fld="width:100%;box-sizing:border-box;border:0;border-radius:10px;background:#fff;padding:13px 14px;font-size:16px;color:#111;";
       const destLabel=()=> dest.type==="inbox" ? "📥 インボックス（あとで分類）" : (escH(dest.emoji||"📁")+" "+escH(dest.name||"(無題)"));
       const destRow=()=> pickable
@@ -1286,28 +1296,31 @@ lucide-react/dist/esm/lucide-react.js:
           target.tasks.push({id:newId(),text,done:false,deadline:date||null,memo,subtasks:[]});
           try{ backup("before-add-task",localStorage.getItem(STORAGE_KEY)); }catch{}
           try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
-          ov.remove();
           try{ sessionStorage.setItem("taskapp-reopen", dest.id); }catch{}   // ④ 追加後にそのプロジェクトを開く
+          close();
           location.reload();
         } else {
-          ov.remove();
+          close();
           addToInbox(text, date||null, memo);   // インボックス: アプリのクイック追加を駆動
         }
       }
 
       paint();
-      ov.appendChild(sheet);
       sheet.addEventListener("click",(ev)=>{
         const act=ev.target.closest("[data-act]"); if(!act) return;
         const a=act.getAttribute("data-act");
-        if(a==="cancel") ov.remove();
+        if(a==="cancel") close();
         else if(a==="dest") chooseDest();
         else if(a==="add") submit();
       });
-      ov.addEventListener("click",(ev)=>{ if(ev.target===ov) ov.remove(); });
+      ov.addEventListener("click",(ev)=>{ if(ev.target===ov) close(); });
       (document.body||document.documentElement).appendChild(ov);
+      (document.body||document.documentElement).appendChild(sheet);
+      if(vv){ vv.addEventListener("resize",place); vv.addEventListener("scroll",place); }
+      place();
       bindFields();
       try{ getF("text").focus(); }catch{}
+      setTimeout(place,60); setTimeout(place,300);   // フォーカス→キーボード展開後にも再配置
     }
   }
 
@@ -1325,14 +1338,15 @@ lucide-react/dist/esm/lucide-react.js:
         const name=idx>=0?list[idx].name:null;
         if(idx>=0){
           let tries=0;
-          (function tryClick(){
+          (function loop(){
+            if(detailViewVisible()) return;   // ④ 詳細が開けたら終了(クリックが効いた)
             const cards=[...document.querySelectorAll(".ta-rail-card")];
             if(cards.length){
               let card = name ? cards.find(c=>c.getAttribute("title")===name) : null;
-              if(!card) card = cards[idx];
-              if(card){ card.click(); return; }
+              if(!card && idx<cards.length) card = cards[idx];
+              if(card) card.click();   // 開くまで再試行(初期描画でクリックが失われても拾い直す)
             }
-            if(tries++<50) setTimeout(tryClick,80);   // React描画を最大~4秒待つ
+            if(tries++<60) setTimeout(loop,150);   // 最大~9秒
           })();
         }
       }
