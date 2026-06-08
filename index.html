@@ -1193,6 +1193,7 @@ lucide-react/dist/esm/lucide-react.js:
         try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(fresh)); }
         catch(e){ alert("保存に失敗しました: "+(e&&e.message||e)); return; }
         ov.remove();
+        try{ sessionStorage.setItem("taskapp-reopen", proj.id); }catch{}   // ④ リロード後に同じプロジェクトへ戻す
         location.reload();   // 追加を画面に反映(リロード後にクラウドへ同期)
       }
       sheet.addEventListener("click",(ev)=>{
@@ -1209,6 +1210,29 @@ lucide-react/dist/esm/lucide-react.js:
   // 6) 自動反映で再読込した際、スクロール位置を元に戻す(シームレスに見せる)
   window.addEventListener("load",()=>{
     try{ const y=sessionStorage.getItem("taskapp-scroll"); if(y!=null){ window.scrollTo(0,Number(y)); sessionStorage.removeItem("taskapp-scroll"); } }catch{}
+    // ④ タスク追加でリロードした後、開いていたプロジェクト詳細へ自動で戻す(最初の画面に戻らない)
+    try{
+      const id=sessionStorage.getItem("taskapp-reopen");
+      if(id){
+        sessionStorage.removeItem("taskapp-reopen");
+        let st=null; try{ st=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null"); }catch{}
+        const list=(st&&Array.isArray(st.projects))?st.projects.filter(p=>p&&!p.deleted&&!p.completed):[];
+        const idx=list.findIndex(p=>p&&p.id===id);
+        const name=idx>=0?list[idx].name:null;
+        if(idx>=0){
+          let tries=0;
+          (function tryClick(){
+            const cards=[...document.querySelectorAll(".ta-rail-card")];
+            if(cards.length){
+              let card = name ? cards.find(c=>c.getAttribute("title")===name) : null;
+              if(!card) card = cards[idx];
+              if(card){ card.click(); return; }
+            }
+            if(tries++<50) setTimeout(tryClick,80);   // React描画を最大~4秒待つ
+          })();
+        }
+      }
+    }catch(e){}
   });
 </script>
 </body>
