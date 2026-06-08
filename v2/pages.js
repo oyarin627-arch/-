@@ -1,42 +1,34 @@
 // 各ページの描画。マイページ(容量)＋掲示板を実装。
-// 「タスク」は従来アプリを app.js が iframe 埋め込み（ここでは扱わない）。
-import { rawLegacy, readLegacyState, byteSize, fmtBytes } from "./store.js";
+// 「タスク」「勉強」は従来アプリを app.js が iframe 埋め込み（ここでは扱わない）。
+import { rawLegacy, readLegacyState, rawStudy, readStudyState, byteSize, fmtBytes } from "./store.js";
 export { renderBoard } from "./board.js";
-
-function placeholder(el, title, note){
-  el.innerHTML =
-    `<div class="card"><h2>${title} <span class="pill">準備中</span></h2>` +
-    `<p class="muted">${note || "このページはこれから作っていきます。"}</p></div>`;
-}
-
-export function renderStudy(el){
-  placeholder(el, "勉強",
-    "「タスク」と全く同じ画面・操作で、データだけ完全に別管理にします（普段のタスクと混ざりません）。" +
-    "従来アプリを“別の保存先”で埋め込む方式で用意します（次段）。");
-}
 
 const DOC_LIMIT = 1048576; // Firestore 1ドキュメントの上限 = 1 MiB
 
-export function renderMyPage(el){
-  const raw = rawLegacy();
-  const docBytes = byteSize(raw);
-  const docPct = Math.min(100, docBytes / DOC_LIMIT * 100);
-  const st = readLegacyState();
+// 同期ドキュメント1件分の使用量カードを作る
+function docCard(title, raw, st){
+  const bytes = byteSize(raw);
+  const pct = Math.min(100, bytes / DOC_LIMIT * 100);
   let projects = 0, tasks = 0;
   if(st && Array.isArray(st.projects)){
     projects = st.projects.filter(p => p && !p.deleted).length;
     tasks = st.projects.reduce((a,p) => a + (((p && p.tasks) || []).length), 0);
   }
-  const cls = docPct >= 90 ? "danger" : (docPct >= 60 ? "warn" : "");
-
-  el.innerHTML = `
+  const cls = pct >= 90 ? "danger" : (pct >= 60 ? "warn" : "");
+  return `
     <div class="card">
-      <h2>クラウド同期データ</h2>
-      <p class="muted">全端末で共有している1つのデータ（Firestoreの1ドキュメント）。上限は <b>1 MiB</b> です。</p>
-      <div class="bar"><div class="bar-fill ${cls}" style="width:${docPct}%"></div></div>
-      <p><b>${fmtBytes(docBytes)}</b> / 1.00 MiB（${docPct.toFixed(1)}%）</p>
+      <h2>${title}</h2>
+      <div class="bar"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
+      <p><b>${fmtBytes(bytes)}</b> / 1.00 MiB（${pct.toFixed(1)}%）</p>
       <p class="muted">内訳：プロジェクト ${projects}件 ／ タスク ${tasks}件</p>
-    </div>
+    </div>`;
+}
+
+export function renderMyPage(el){
+  el.innerHTML = `
+    <p class="muted" style="margin:6px 2px 2px">クラウド同期データ（全端末で共有。各 <b>1ドキュメント＝最大 1 MiB</b>）</p>
+    ${docCard("タスク", rawLegacy(), readLegacyState())}
+    ${docCard("勉強", rawStudy(), readStudyState())}
 
     <div class="card" id="device-card">
       <h2>この端末の保存容量</h2>

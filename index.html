@@ -2,6 +2,31 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<!-- 名前空間シム: URLに ?ns=xxx があるときだけ、この画面の localStorage/sessionStorage の
+     全キーに接頭辞を付けてデータを完全分離する(「勉強」タブ用)。?ns 無し(通常の /)は何もしない。
+     アプリ本体・同期ブリッジより前に実行する必要があるため <head> 先頭に置く。 -->
+<script>
+(function(){
+  try{
+    var ns = new URLSearchParams(location.search).get("ns");
+    if(!ns) return;                                   // 通常アクセスは一切変更しない
+    ns = String(ns).replace(/[^a-zA-Z0-9_-]/g,"").slice(0,24);
+    if(!ns) return;
+    var P = "ns-" + ns + ":";
+    window.__TASKAPP_NS__ = ns;                       // 同期ブリッジが Firestore ドキュメント選択に使う
+    var proto = Storage.prototype;
+    var _get = proto.getItem, _set = proto.setItem, _rem = proto.removeItem;
+    proto.getItem    = function(k){ return _get.call(this, P + k); };
+    proto.setItem    = function(k, v){ return _set.call(this, P + k, v); };
+    proto.removeItem = function(k){ return _rem.call(this, P + k); };
+    // 動作確認(失敗時は元に戻して混在を避ける)
+    window.localStorage.setItem("__nstest__", "1");
+    var ok = _get.call(window.localStorage, P + "__nstest__") === "1";
+    window.localStorage.removeItem("__nstest__");
+    if(!ok){ proto.getItem = _get; proto.setItem = _set; proto.removeItem = _rem; window.__TASKAPP_NS__ = null; }
+  }catch(e){}
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>タスク管理</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -689,7 +714,9 @@ lucide-react/dist/esm/lucide-react.js:
 
   const app=initializeApp(firebaseConfig);
   const db=getFirestore(app);
-  const stateRef=doc(db,"taskapp","shared");
+  // 名前空間(?ns=)があれば別ドキュメントで同期(「勉強」は taskapp/ns-study)。無ければ従来どおり shared。
+  const NS=(typeof window!=="undefined" && window.__TASKAPP_NS__) ? String(window.__TASKAPP_NS__) : null;
+  const stateRef=doc(db,"taskapp", NS ? ("ns-"+NS) : "shared");
 
   // ====== 同期エンジン(シンプル版) ======
   // 設計: 変化(クラウド受信 or 手元編集)があったら reconcile() だけが動く。

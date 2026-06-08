@@ -10,6 +10,14 @@ export function readLegacyState(){
   try{ return JSON.parse(rawLegacy() || "null"); }catch{ return null; }
 }
 
+// 「勉強」タブは名前空間 ns-study: で別保存(別Firestoreドキュメント)
+export function rawStudy(){
+  try{ return localStorage.getItem("ns-study:" + LEGACY_KEY) || ""; }catch{ return ""; }
+}
+export function readStudyState(){
+  try{ return JSON.parse(rawStudy() || "null"); }catch{ return null; }
+}
+
 // 文字列のバイト数(UTF-8相当)
 export function byteSize(str){
   try{ return new Blob([str || ""]).size; }catch{ return (str || "").length; }

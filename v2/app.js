@@ -1,14 +1,14 @@
 // 新アプリ(再構築版)の起動とページ切替。ビルド不要のESモジュール。
 // 「タスク」タブは従来アプリ(/index.html)をそのまま iframe 埋め込み
 //  → 見た目・操作性・同期を従来と完全に同一に保つ。
-import { renderBoard, renderStudy, renderMyPage } from "./pages.js";
+import { renderBoard, renderMyPage } from "./pages.js";
 
 // ページ順は左から「掲示板」「タスク」「勉強」「マイページ」
 //  embed: 従来アプリをiframeで埋め込むページ / render: v2で描画するページ
 const PAGES = [
   { id:"board",  label:"掲示板",     icon:"📌", render:renderBoard },
   { id:"tasks",  label:"タスク",     icon:"✅", embed:"../index.html" },
-  { id:"study",  label:"勉強",       icon:"📚", render:renderStudy },
+  { id:"study",  label:"勉強",       icon:"📚", embed:"../index.html?ns=study" },
   { id:"mypage", label:"マイページ", icon:"👤", render:renderMyPage },
 ];
 const DEFAULT_PAGE = "tasks";
