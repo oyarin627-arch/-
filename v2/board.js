@@ -38,12 +38,19 @@ const cdDays = d => {                       // 目標日付までの残り日数
   return Math.round((t - today.getTime())/86400000);
 };
 const cdText = d => { const n = cdDays(d); return n===null ? "—" : (n>0 ? `あと ${n}日` : (n===0 ? "本日" : `${-n}日経過`)); };
-const cdDateLabel = d => { try{ return new Date(d + "T00:00:00").toLocaleDateString([], {year:"numeric",month:"2-digit",day:"2-digit"}); }catch{ return ""; } };
+// リング中央に出す数字(残り日数。過去は経過日数の絶対値)。本日は 0。
+const cdNum = d => { const n = cdDays(d); return n===null ? "—" : String(n>=0 ? n : -n); };
+// 日付表示は写真に合わせて「6月13日 (土)」形式
+const cdDateLabel = d => {
+  const dt = new Date(d + "T00:00:00"); if(isNaN(dt)) return "";
+  const wd = "日月火水木金土"[dt.getDay()];
+  return `${dt.getMonth()+1}月${dt.getDate()}日 (${wd})`;
+};
 // 表示中のカウントダウンを定期更新(日付が変わったら反映)
 let cdTimer = null;
 function refreshCd(){
   if(!mountEl) return;
-  mountEl.querySelectorAll("[data-cd]").forEach(el => { el.textContent = cdText(el.getAttribute("data-cd")); });
+  mountEl.querySelectorAll("[data-cd]").forEach(el => { el.textContent = cdNum(el.getAttribute("data-cd")); });
 }
 function ensureTicker(){
   const has = mountEl && mountEl.querySelector("[data-cd]");
@@ -148,18 +155,21 @@ function blockEl(b){
   return wrap;
 }
 
-// カウントダウンのチップ(上部に横並び)。タップで編集、✕で削除。
+// カウントダウンのチップ(上部に横並び)。円リング＋中央に残り日数、下にタイトル・日付。タップで編集、✕で削除。
 function cdChip(b){
-  const col = b.color || "#ffffff";
+  const col = b.color || "#a5d8ff";
+  const n = cdDays(b.date);
+  const past = (n !== null && n < 0);
   const el = document.createElement("button");
   el.type = "button";
-  el.className = "bcd-chip";
-  el.style.background = col; el.style.borderColor = shade(col,0.8);
+  el.className = "bcd-chip" + (past ? " past" : "");
   el.innerHTML = `
     <span class="bcd-x" title="削除">✕</span>
-    <span class="bcd-num" data-cd="${b.date}">${cdText(b.date)}</span>
+    <span class="bcd-ring" style="border-color:${col}">
+      <span class="bcd-num" data-cd="${b.date}">${cdNum(b.date)}</span>
+    </span>
     <span class="bcd-label">${(b.label||"").replace(/[<>&]/g, c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))||"（無題）"}</span>
-    <span class="bcd-date">🎯 ${cdDateLabel(b.date)}</span>`;
+    <span class="bcd-date">${cdDateLabel(b.date)}</span>`;
   el.querySelector(".bcd-x").onclick = (e) => { e.stopPropagation(); removeForever(b.id); };
   el.onclick = () => openCdEditor(b);
   return el;
