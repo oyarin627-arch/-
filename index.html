@@ -1223,15 +1223,15 @@ lucide-react/dist/esm/lucide-react.js:
       const ov=document.createElement("div");
       ov.style.cssText="position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.35);font:15px/1.5 -apple-system,system-ui,sans-serif;";
       const sheet=document.createElement("div");
-      // ② シートは visualViewport(キーボード除く可視領域)の下端へアンカー。オートフォーカス時に上へ突き抜けない
-      sheet.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:100002;background:#f2f2f7;color:#111;border-radius:16px 16px 0 0;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;padding-bottom:env(safe-area-inset-bottom,0px);";
+      // ② シートは画面最上部にアンカー(ヘッダーを常に表示)。埋め込みiframeではキーボードでvvが縮まないため、
+      //    下端アンカーだと内容がキーボードに押し上げられてヘッダーが画面外に出ていた。上端固定で回避。
+      sheet.style.cssText="position:fixed;top:0;left:0;right:0;z-index:100002;background:#f2f2f7;color:#111;border-radius:0 0 16px 16px;max-height:100%;display:flex;flex-direction:column;overflow:hidden;padding-top:env(safe-area-inset-top,0px);box-shadow:0 6px 24px rgba(0,0,0,.25);";
       const vv=window.visualViewport;
       function place(){
-        if(vv){
-          const gap=Math.max(0, window.innerHeight-(vv.offsetTop+vv.height));   // キーボード等の下端余白
-          sheet.style.bottom=gap+"px";
-          sheet.style.maxHeight=(vv.height-8)+"px";
-        }
+        const top = vv ? vv.offsetTop : 0;
+        const h = vv ? vv.height : window.innerHeight;
+        sheet.style.top = top + "px";
+        sheet.style.maxHeight = h + "px";   // キーボード上の可視領域内に収め、超過分は内部スクロール
       }
       function close(){ try{ if(vv){ vv.removeEventListener("resize",place); vv.removeEventListener("scroll",place); } }catch{} ov.remove(); sheet.remove(); }
       const fld="width:100%;box-sizing:border-box;border:0;border-radius:10px;background:#fff;padding:13px 14px;font-size:16px;color:#111;";
@@ -1317,6 +1317,8 @@ lucide-react/dist/esm/lucide-react.js:
       (document.body||document.documentElement).appendChild(ov);
       (document.body||document.documentElement).appendChild(sheet);
       if(vv){ vv.addEventListener("resize",place); vv.addEventListener("scroll",place); }
+      // キーボード展開でページ自体が上スクロールしても、上端固定シートを画面最上部へ戻す
+      sheet.addEventListener("focusin",()=>{ try{ window.scrollTo(0,0); }catch{} place(); });
       place();
       bindFields();
       try{ getF("text").focus(); }catch{}
@@ -1340,10 +1342,11 @@ lucide-react/dist/esm/lucide-react.js:
           let tries=0;
           (function loop(){
             if(detailViewVisible()) return;   // ④ 詳細が開けたら終了(クリックが効いた)
-            const cards=[...document.querySelectorAll(".ta-rail-card")];
+            // ホーム画面にレールは無い。プロジェクトカード(button.ta-card 内に .ta-card-name)をクリックして開く
+            const cards=[...document.querySelectorAll(".ta-card")].filter(c=>c.querySelector(".ta-card-name"));
             if(cards.length){
-              let card = name ? cards.find(c=>c.getAttribute("title")===name) : null;
-              if(!card && idx<cards.length) card = cards[idx];
+              let card = name ? cards.find(c=>{ const e=c.querySelector(".ta-card-name"); return e && e.textContent.trim()===name; }) : null;
+              if(!card && idx<cards.length) card = cards[idx];   // フォールバック(並び順)
               if(card) card.click();   // 開くまで再試行(初期描画でクリックが失われても拾い直す)
             }
             if(tries++<60) setTimeout(loop,150);   // 最大~9秒

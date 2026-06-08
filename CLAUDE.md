@@ -166,11 +166,15 @@ localStorage キー **`taskapp-state-v1`** に、次の形のJSONが入る:
 - ✅ **【v2 掲示板 同期＋見た目修正】**。同期＝`v2/boardsync.js`（Firestore `taskapp/board`、3-wayマージ＝両端末の追加/編集を残す・同IDブロック競合は`updatedAt`新しい方・安全弁`isWipe`・オフライン中は送らず復帰時`getDocFromServer`・土台は`local===cloud`時のみ更新）。掲示板はミニファイ版と違い**再描画で反映＝リロード不要**。Firebaseは掲示板初回表示で遅延`import`、`setBusy`で編集/並び替え中は遠隔反映を保留。`board.js`の`save()`が`noteLocalChange()`を呼ぶ。見た目：①ブロックを不透明化（透明度バー削除、色スウォッチは42pxに拡大）②サイズ/太字/箇条書きの選択状態を`queryCommandState/Value`＋`selectionchange`でボタン青表示（`.be-tool.on`）③ブロックに自色を`shade(col,0.8)`で少し濃くした極細の縁。Nodeでマージ検証済み。
 - ✅ **【タスク④】タスク追加でリロード後、最初の画面に戻らず開いていたプロジェクト詳細へ自動復帰**。`index.html`のブリッジ：`openTaskComposer.submit()`で`sessionStorage["taskapp-reopen"]=proj.id`を保存→`load`時に対象`.ta-rail-card`（`title`=プロジェクト名で照合、無ければ有効プロジェクトindex）を最大~4秒待ってclickし詳細を開く。`.ta-rail-card`はレール常駐で`onClick:()=>o(d.id)`。
 - ✅ **【タスク⑤】「タスク一覧」もFAB「タスクを追加」に統一**。インライン・クイック追加欄`.ta-add-bar-quick`はCSSで非表示（DOMには残す）。FABは`detailViewVisible()||listViewVisible()`で表示（`listViewVisible`=`.ta-add-bar-quick`の存在）。`openComposer({mode})`に一般化：`project`=現在のプロジェクトへ直接書き込み（従来どおり＋④reopen）／`inbox`=既定インボックス＋「追加先：」タップで`chooseDest`（インボックス or プロジェクト選択）。**インボックス保存先は不明なため、アプリ自身のクイック追加欄を駆動**（`setNativeValue`＋input/Enter/`button.ta-pill`クリック）して追加→**期限/メモは追加後に全state走査で新タスクを特定して付与**（`collectTaskIds`/`findTaskById`、保存場所非依存。Nodeで検証）。内容のみはリロード不要、期限/メモ有り時のみreload。
-- ✅ **【実機FBで再修正・3点】**
-  - **④ プロジェクト復帰が効かなかった件を修正**：reopen側が「一度クリックして即`return`」していたため、React初期描画でクリックが失われると開けなかった。**`detailViewVisible()`になるまで150ms間隔で再試行**（最大~9秒）に変更。レールカードは`<button class="ta-rail-card" title=プロジェクト名 onClick:()=>o(d.id)>`（`.ta-split`の常駐レール、ホームでも存在）と確認。
-  - **② コンポーザーのシートが上に突き抜ける件を修正**：`justify-content:flex-end`の固定オーバーレイ＋オートフォーカスで、キーボード展開時にiOSがレイアウトビューポートごと上スクロールしヘッダーが画面外に出ていた。シートを`position:fixed;bottom`にして**`visualViewport`へアンカー**（`place()`で`bottom=innerHeight-(offsetTop+height)`／`maxHeight=height-8`、resize/scrollで追従、`close()`でリスナ解除）。一発で正しい位置（キーボード直上）に出る。
-  - **③ 掲示板にカウントダウンを追加**：ブロックに任意の`countdown`（datetime-local文字列）を持たせ、設定すると残り時間（`countdownText`：>1日は「あと N日 H時間M分」、当日は「H:MM:SS」、過去は「… 経過」）をブロック上部に大きく表示。`[data-cd]`を毎秒更新（`ensureTicker`/`refreshCd`、表示が無ければ停止）。バーに「⏳ カウントダウン」ボタン（編集シートを開き日時入力にフォーカス＝`openEditor(null,{focusCd:true})`）。編集シート末尾に日時入力＋クリア。同期はブロックJSONに含まれる＝boardsync変更不要。
-- ⏳ **上記の最新修正は、ユーザーによる実機確認待ち**
+- ✅ **【実機FBで再修正・3点／その1】**
+  - **④ プロジェクト復帰が効かなかった件を修正**：reopen側が「一度クリックして即`return`」していたため、React初期描画でクリックが失われると開けなかった。**`detailViewVisible()`になるまで150ms間隔で再試行**（最大~9秒）に変更。
+  - **② コンポーザーのシートが上に突き抜ける件**：`visualViewport`の下端アンカーで対応（※iframeでは後述の理由で不十分→その2で再修正）。
+  - **③ 掲示板にカウントダウン**：当初ブロック内にdatetime-localで「H:MM:SS」表示（※その2でタスク同仕様に作り替え）。
+- ✅ **【実機FBで再々修正・3点／その2＝現行】**
+  - **④ ホーム画面にレールが無いのが真因**：`qm({selected:t})`は**`t`(選択中プロジェクト)が真のときだけ`.ta-split`＋`.ta-rail-card`を描画**。リロード後のホームには`.ta-rail-card`が存在せず空振りしていた。ホームのプロジェクトカードは`button.ta-card`（中に`.ta-card-name`=名前、onClick=`h(E.id)`で開く。`ta-tl-card`=タスク一覧/`ta-card-add`/`ta-bin-proj`は除外）。reopenを**`.ta-card`(直下に`.ta-card-name`を持つもの)を名前一致→idxフォールバックでクリック、`detailViewVisible()`まで再試行**に変更。
+  - **② iframe埋め込みではキーボードで`visualViewport`が縮まない**ためボトムシートが押し上がりヘッダーが画面外へ。コンポーザーのシートを**画面最上部アンカー**(`position:fixed;top:0`、`border-radius:0 0 16px 16px`、ヘッダーは`flex:none`で常時最上部、超過は内部スクロール)に変更。`place()`は`top=vv.offsetTop`/`maxHeight=vv.height`、`focusin`で`window.scrollTo(0,0)`。一発でヘッダー＋内容が見える位置に出る。
+  - **③ カウントダウンをタスクページ同仕様に作り替え**：**日付ベースで「あと○日」**（`cdDays`=暦日差、`cdText`：`n>0?あと n日:n===0?本日:${-n}日経過`）。**上部にチップを横並び**（`.bcd-row`＋`.bcd-chip`、大きい数字＋タイトル＋🎯日付、✕で削除・タップで編集）。データは**`blocks`内の`kind:"cd"`ブロック**として保存（※boardsyncの`normStr`/`mergeBoard`は`blocks`のみ採用するため、別配列だと同期で消える）。通常ブロックとは描画・並び替え対象から分離（`reorderActive`も`kind!=="cd"`で除外）。`openCdEditor`＝ラベル＋日付＋色の専用シート。30秒間隔で日付変化を反映。
+- ⏳ **上記（その2）は、ユーザーによる実機確認待ち**
 
 直近の主要コミット（新しい順）:
 - （本コミット）プロジェクト並び替えの復元バグ修正＋メモ添付ファイルのタップ起動対応
