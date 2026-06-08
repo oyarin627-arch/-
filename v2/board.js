@@ -1,9 +1,8 @@
 // 掲示板(Bulletin board)
-//  ・ブロックを複数追加(半透明＋色変更／メモと同じ文字編集／写真)
-//  ・横スワイプで「編集／アーカイブ」ボタン表示 → 編集ボタンで編集モード
-//  ・長押しで並び替え・アーカイブモード
-//  ・アーカイブ閲覧(復元／完全削除)
-//  データは localStorage("taskapp-board-v1") に保存(同期は後段で安全に追加)。
+//  ・ブロックを複数追加(不透明＋色変更／メモと同じ文字編集／写真)
+//  ・横スワイプで「編集／アーカイブ」 ・長押しで並び替え/アーカイブ ・アーカイブ閲覧
+//  ・同期(boardsync): 3-wayマージ＋安全弁。掲示板は再描画で反映＝リロード不要。
+//  データは localStorage("taskapp-board-v1")。
 
 const BOARD_KEY = "taskapp-board-v1";
 const PALETTE = ["#ffffff","#ffd8a8","#ffec99","#d3f9d8","#a5d8ff","#d0bfff","#ffc9c9","#c5f6fa","#ced4da"];
@@ -18,13 +17,18 @@ function load(){
   try{ const d = JSON.parse(localStorage.getItem(BOARD_KEY) || "null"); if(d && Array.isArray(d.blocks)) return d; }catch{}
   return { blocks: [] };
 }
-function save(state){ try{ localStorage.setItem(BOARD_KEY, JSON.stringify(state)); }catch(e){ alert("保存に失敗: " + (e && e.message || e)); } }
+function save(state){
+  try{ localStorage.setItem(BOARD_KEY, JSON.stringify(state)); }catch(e){ alert("保存に失敗: " + (e && e.message || e)); }
+  if(boardSync) boardSync.noteLocalChange();    // 同期へ手元変更を通知
+}
 
-function hexToRgba(hex, a){
+// 色を少し濃くする(縁の色用)。f<1 で暗く。
+function shade(hex, f){
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
-  if(!m) return "rgba(255,255,255," + a + ")";
+  if(!m) return "rgba(0,0,0,.15)";
   const n = parseInt(m[1],16);
-  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  const r=Math.round(((n>>16)&255)*f), g=Math.round(((n>>8)&255)*f), b=Math.round((n&255)*f);
+  return `rgb(${r},${g},${b})`;
 }
 const fmtTime = t => { try{ return new Date(t).toLocaleString(); }catch{ return ""; } };
 
@@ -33,8 +37,27 @@ let mountEl = null;
 let view = "board";        // "board" | "archive"
 let reordering = false;
 
+/* ---- 同期(遅延読み込みでFirebaseの読込みを掲示板を開くまで遅らせる) ---- */
+let boardSync = null, syncStarted = false;
+function startSync(){
+  if(syncStarted) return; syncStarted = true;
+  import("./boardsync.js").then(m => {
+    boardSync = m;
+    m.initBoardSync({
+      getLocalStr: () => { try{ return localStorage.getItem(BOARD_KEY) || ""; }catch{ return ""; } },
+      applyRemoteStr: (str) => {
+        try{ localStorage.setItem(BOARD_KEY, str); }catch{}
+        state = load();
+        if(mountEl && document.contains(mountEl) && mountEl.querySelector("#b-list, #a-list")) draw();
+      }
+    });
+  }).catch(e => console.error("[board] sync load failed", e));
+}
+const setBusy = b => { if(boardSync) boardSync.setBusy(b); };
+
 export function renderBoard(el){
   mountEl = el; state = load(); view = "board"; reordering = false;
+  startSync();
   draw();
 }
 
@@ -61,7 +84,7 @@ function draw(){
     banner.className = "reorder-banner";
     banner.innerHTML = `<span>並び替え・アーカイブ中（≡でドラッグ）</span><button class="btn-ghost" id="b-done">完了</button>`;
     list.appendChild(banner);
-    banner.querySelector("#b-done").onclick = () => { reordering = false; draw(); };
+    banner.querySelector("#b-done").onclick = () => { reordering = false; setBusy(false); draw(); };
   }
   if(!blocks.length && !reordering){
     list.insertAdjacentHTML("beforeend", `<div class="board-empty">まだブロックがありません。<br>「＋ ブロックを追加」で作成できます。</div>`);
@@ -69,7 +92,10 @@ function draw(){
   blocks.forEach(b => list.appendChild(blockEl(b)));
 }
 
+function blockColor(b){ return b.color || "#ffffff"; }
+
 function blockEl(b){
+  const col = blockColor(b);
   const wrap = document.createElement("div");
   wrap.className = "bblock-wrap"; wrap.dataset.id = b.id;
   wrap.innerHTML = `
@@ -77,7 +103,7 @@ function blockEl(b){
       <button class="bblock-act-edit">編集</button>
       <button class="bblock-act-arch">アーカイブ</button>
     </div>
-    <div class="bblock" style="background:${hexToRgba(b.color || "#ffffff", b.alpha == null ? 0.55 : b.alpha)}">
+    <div class="bblock" style="background:${col};border:1px solid ${shade(col,0.8)}">
       <button class="bblock-arch-btn" title="アーカイブ">✕</button>
       <button class="bblock-grip" title="ドラッグで並び替え">≡</button>
       <div class="bblock-content"></div>
@@ -86,10 +112,8 @@ function blockEl(b){
   wrap.querySelector(".bblock-content").innerHTML = b.html || "";
   const card = wrap.querySelector(".bblock");
 
-  // アクションボタン(スワイプで表示)
   wrap.querySelector(".bblock-act-edit").onclick = () => openEditor(b);
   wrap.querySelector(".bblock-act-arch").onclick = () => archive(b.id);
-  // 並び替えモードのボタン
   wrap.querySelector(".bblock-arch-btn").onclick = (e) => { e.stopPropagation(); archive(b.id); };
 
   attachGestures(wrap, card, b);
@@ -106,7 +130,7 @@ function attachGestures(wrap, card, b){
   const grip = wrap.querySelector(".bblock-grip");
 
   card.addEventListener("pointerdown", (e) => {
-    if(reordering) return;                 // 並び替え中はスワイプ無効
+    if(reordering) return;
     sx=e.clientX; sy=e.clientY; moved=false; swiping=false;
     baseTx = (card.style.transform.match(/-?\d+(\.\d+)?/) ? parseFloat(card.style.transform.match(/-?\d+(\.\d+)?/)[0]) : 0);
     lp = setTimeout(() => { if(!moved && !swiping){ enterReorder(); } }, 500);
@@ -115,7 +139,7 @@ function attachGestures(wrap, card, b){
     if(reordering) return;
     const dx=e.clientX-sx, dy=e.clientY-sy;
     if(Math.abs(dx)>8 || Math.abs(dy)>8){ moved=true; }
-    if(Math.abs(dy)>10){ clearTimeout(lp); }       // 縦スクロールは長押し扱いにしない
+    if(Math.abs(dy)>10){ clearTimeout(lp); }
     if(!swiping && Math.abs(dx)>10 && Math.abs(dx)>Math.abs(dy)){ swiping=true; clearTimeout(lp); closeAllSwipes(card); }
     if(swiping){
       e.preventDefault();
@@ -130,17 +154,16 @@ function attachGestures(wrap, card, b){
       const tx = (card.style.transform.match(/-?\d+(\.\d+)?/) ? parseFloat(card.style.transform.match(/-?\d+(\.\d+)?/)[0]) : 0);
       card.style.transform = tx < -ACTION_W/2 ? `translateX(${-ACTION_W}px)` : "";
     } else if(!moved){
-      closeAllSwipes();                      // タップ: 開いているスワイプを閉じる
+      closeAllSwipes();
     }
   };
   card.addEventListener("pointerup", end);
   card.addEventListener("pointercancel", end);
 
-  // 並び替えモードのドラッグ(グリップ)
   grip.addEventListener("pointerdown", (e) => { if(reordering){ e.preventDefault(); e.stopPropagation(); startDrag(wrap, b.id, e); } });
 }
 
-function enterReorder(){ if(reordering) return; reordering = true; closeAllSwipes(); draw(); }
+function enterReorder(){ if(reordering) return; reordering = true; setBusy(true); closeAllSwipes(); draw(); }
 
 /* ---- ドラッグ並び替え ---- */
 let drag = null;
@@ -163,10 +186,8 @@ function onDrag(e){
     target = i;
   }
   if(target !== cur && target >= 0){
-    // 表示順(=非アーカイブ)の cur→target を、実データ state.blocks 上で入れ替える
     reorderActive(cur, target);
     draw();
-    // draw() で wrap が作り直されるので、新しい要素を掴み直す
     const nl = mountEl.querySelector("#b-list");
     const nw = [...nl.querySelectorAll(".bblock-wrap")].find(w => w.dataset.id === drag.id);
     if(nw){ drag.wrap = nw; nw.classList.add("dragging"); }
@@ -178,13 +199,11 @@ function endDrag(){
   window.removeEventListener("pointermove", onDrag);
 }
 function reorderActive(from, to){
-  // 表示インデックス(非アーカイブのみ)→ 実インデックスへ写像して移動
   const activeIdx = [];
   state.blocks.forEach((b,i) => { if(!b.archived) activeIdx.push(i); });
   if(from<0||from>=activeIdx.length||to<0||to>=activeIdx.length) return;
   const realFrom = activeIdx[from];
   const [moved] = state.blocks.splice(realFrom,1);
-  // toの実位置を再計算
   const activeIdx2 = [];
   state.blocks.forEach((b,i) => { if(!b.archived) activeIdx2.push(i); });
   const realTo = to >= activeIdx2.length ? state.blocks.length : activeIdx2[to];
@@ -195,11 +214,11 @@ function reorderActive(from, to){
 /* ---- アーカイブ ---- */
 function archive(id){
   const b = state.blocks.find(x => x.id === id); if(!b) return;
-  b.archived = true; b.archivedAt = now(); save(state); draw();
+  b.archived = true; b.archivedAt = now(); b.updatedAt = now(); save(state); draw();
 }
 function unarchive(id){
   const b = state.blocks.find(x => x.id === id); if(!b) return;
-  b.archived = false; b.archivedAt = null; save(state); draw();
+  b.archived = false; b.archivedAt = null; b.updatedAt = now(); save(state); draw();
 }
 function removeForever(id){
   if(!confirm("このブロックを完全に削除します。元に戻せません。よろしいですか？")) return;
@@ -218,10 +237,11 @@ function drawArchive(){
   const list = mountEl.querySelector("#a-list");
   if(!arch.length){ list.innerHTML = `<div class="board-empty">アーカイブは空です。</div>`; return; }
   arch.forEach(b => {
+    const col = blockColor(b);
     const wrap = document.createElement("div");
     wrap.className = "bblock-wrap";
     wrap.innerHTML = `
-      <div class="bblock" style="background:${hexToRgba(b.color||"#ffffff", b.alpha==null?0.55:b.alpha)}">
+      <div class="bblock" style="background:${col};border:1px solid ${shade(col,0.8)}">
         <div class="bblock-content"></div>
         <div class="bblock-meta">アーカイブ: ${fmtTime(b.archivedAt)}</div>
         <div style="display:flex;gap:10px;margin-top:10px">
@@ -236,12 +256,12 @@ function drawArchive(){
   });
 }
 
-/* ---- 編集シート(メモと同じ文字編集 + 色/透明度 + 写真) ---- */
+/* ---- 編集シート(メモと同じ文字編集 + 色 + 写真) ---- */
 function openEditor(block){
   const isNew = !block;
-  const data = block || { id:uid(), html:"", color:"#ffffff", alpha:0.55, createdAt:now() };
+  const data = block || { id:uid(), html:"", color:"#ffffff", createdAt:now() };
   let color = data.color || "#ffffff";
-  let alpha = data.alpha == null ? 0.55 : data.alpha;
+  setBusy(true);
 
   const ov = document.createElement("div"); ov.className = "be-overlay";
   ov.innerHTML = `
@@ -263,13 +283,10 @@ function openEditor(block){
       </div>
       <div class="be-editor" contenteditable="true" data-ph="ここに内容を入力…"></div>
       <div class="be-appearance">
-        <div class="row"><span class="label">ブロックの色</span><span id="be-colors"></span></div>
-        <div class="row"><span class="label">透明度</span>
-          <input type="range" id="be-alpha" min="20" max="100" value="${Math.round(alpha*100)}" style="flex:1">
-          <span id="be-alpha-val" style="width:42px;text-align:right">${Math.round(alpha*100)}%</span>
-        </div>
-        <div class="row"><span class="label">プレビュー</span>
-          <span id="be-preview" style="flex:1;height:34px;border-radius:10px;border:1px solid var(--sep)"></span>
+        <div class="row"><span class="label">ブロックの色</span></div>
+        <div class="bswatch-grid" id="be-colors"></div>
+        <div class="row" style="margin-top:10px"><span class="label">プレビュー</span>
+          <span id="be-preview" style="flex:1;height:38px;border-radius:10px"></span>
         </div>
       </div>
       <div class="be-foot">
@@ -281,33 +298,30 @@ function openEditor(block){
   const editor = ov.querySelector(".be-editor");
   editor.innerHTML = data.html || "";
   const preview = ov.querySelector("#be-preview");
-  const updatePreview = () => { preview.style.background = hexToRgba(color, alpha); };
+  const updatePreview = () => { preview.style.background = color; preview.style.border = "1px solid " + shade(color,0.8); };
   updatePreview();
 
-  // ブロック色スウォッチ
+  // ブロック色スウォッチ(大きめ・押しやすい)
   const colorsWrap = ov.querySelector("#be-colors");
   PALETTE.forEach(c => {
-    const s = document.createElement("span");
-    s.className = "be-swatch" + (c === color ? " sel" : "");
-    s.style.background = c; s.dataset.bcolor = c;
-    s.onclick = () => { color = c; colorsWrap.querySelectorAll(".be-swatch").forEach(x => x.classList.toggle("sel", x.dataset.bcolor === c)); updatePreview(); };
+    const s = document.createElement("button");
+    s.type = "button";
+    s.className = "be-bswatch" + (c === color ? " sel" : "");
+    s.style.background = c; s.style.borderColor = shade(c,0.8); s.dataset.bcolor = c;
+    s.onclick = () => { color = c; colorsWrap.querySelectorAll(".be-bswatch").forEach(x => x.classList.toggle("sel", x.dataset.bcolor === c)); updatePreview(); };
     colorsWrap.appendChild(s);
   });
-  // 透明度
-  const alphaInput = ov.querySelector("#be-alpha");
-  const alphaVal = ov.querySelector("#be-alpha-val");
-  alphaInput.oninput = () => { alpha = Number(alphaInput.value)/100; alphaVal.textContent = alphaInput.value + "%"; updatePreview(); };
 
   // ツールバー(選択を保持するため mousedown を抑止)
   ov.querySelectorAll(".be-tool, .be-swatch[data-color]").forEach(btn => {
     btn.addEventListener("mousedown", e => e.preventDefault());
     btn.addEventListener("pointerdown", e => e.preventDefault());
   });
-  const exec = (cmd, val, css) => { editor.focus(); document.execCommand("styleWithCSS", false, !!css); document.execCommand(cmd, false, val === undefined ? null : val); };
+  const exec = (cmd, val, css) => { editor.focus(); document.execCommand("styleWithCSS", false, !!css); document.execCommand(cmd, false, val === undefined ? null : val); updateToolbarState(); };
   ov.querySelectorAll(".be-tool").forEach(btn => {
     btn.addEventListener("click", () => {
-      if(btn.dataset.size) exec("fontSize", String(btn.dataset.size), false);     // <font size> (CSSで均等サイズ)
-      else if(btn.dataset.cmd === "bold") exec("bold", null, false);              // 太字は <b> (サイズと共存)
+      if(btn.dataset.size) exec("fontSize", String(btn.dataset.size), false);
+      else if(btn.dataset.cmd === "bold") exec("bold", null, false);
       else if(btn.dataset.cmd === "ul") exec("insertUnorderedList", null, false);
       else if(btn.dataset.cmd === "photo") pickPhoto(editor);
     });
@@ -316,21 +330,42 @@ function openEditor(block){
     sw.addEventListener("click", () => exec("foreColor", sw.dataset.color, true));
   });
 
-  // 保存/キャンセル/アーカイブ
-  ov.querySelector('[data-act="cancel"]').onclick = () => ov.remove();
+  // ② 選択中の整形(サイズ/太字/箇条書き)をボタンの青で示す
+  function updateToolbarState(){
+    let bold=false, ul=false, sizeVal="";
+    try{ bold = document.queryCommandState("bold"); }catch{}
+    try{ ul = document.queryCommandState("insertUnorderedList"); }catch{}
+    try{ sizeVal = String(document.queryCommandValue("fontSize") || ""); }catch{}
+    ov.querySelectorAll(".be-tool").forEach(btn => {
+      let on = false;
+      if(btn.dataset.size) on = (btn.dataset.size === sizeVal);
+      else if(btn.dataset.cmd === "bold") on = bold;
+      else if(btn.dataset.cmd === "ul") on = ul;
+      btn.classList.toggle("on", on);
+    });
+  }
+  const onSel = () => { const s = document.getSelection(); if(s && s.anchorNode && editor.contains(s.anchorNode)) updateToolbarState(); };
+  document.addEventListener("selectionchange", onSel);
+  editor.addEventListener("keyup", updateToolbarState);
+  editor.addEventListener("mouseup", updateToolbarState);
+
+  const close = () => { document.removeEventListener("selectionchange", onSel); setBusy(false); ov.remove(); };
+
+  ov.querySelector('[data-act="cancel"]').onclick = close;
   ov.querySelector('[data-act="save"]').onclick = () => {
-    data.html = editor.innerHTML; data.color = color; data.alpha = alpha; data.updatedAt = now();
+    data.html = editor.innerHTML; data.color = color; data.updatedAt = now();
+    if("alpha" in data) delete data.alpha;          // 旧データの透明度は破棄
     if(isNew) state.blocks.unshift(data);
     else { const i = state.blocks.findIndex(x => x.id === data.id); if(i>=0) state.blocks[i] = data; }
-    save(state); ov.remove(); draw();
+    save(state); close(); draw();
   };
   const archBtn = ov.querySelector('[data-act="archive"]');
-  if(archBtn) archBtn.onclick = () => { ov.remove(); archive(data.id); };
+  if(archBtn) archBtn.onclick = () => { close(); archive(data.id); };
 
-  setTimeout(() => editor.focus(), 30);
+  setTimeout(() => { editor.focus(); updateToolbarState(); }, 30);
 }
 
-/* 写真: 圧縮して挿入(ローカル保存。同期時の容量対策は後段で設計) */
+/* 写真: 圧縮して挿入 */
 function pickPhoto(editor){
   const input = document.createElement("input");
   input.type = "file"; input.accept = "image/*";

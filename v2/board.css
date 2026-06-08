@@ -19,9 +19,9 @@
 .bblock-act-arch{ background:#8e8e93; }
 .bblock{
   position:relative; z-index:1; border-radius:16px; padding:16px 18px; min-height:54px;
-  border:1px solid rgba(0,0,0,.06); box-shadow:0 1px 3px rgba(0,0,0,.06);
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
   transition:transform .18s ease; touch-action:pan-y; -webkit-user-select:none; user-select:none;
-  background:rgba(255,255,255,.55); backdrop-filter:saturate(140%) blur(2px);
+  background:#ffffff;   /* 実際の色・縁は JS が inline で指定(不透明) */
 }
 .bblock-content{ word-break:break-word; }
 .bblock-content:empty::before{ content:"（空のブロック）"; color:var(--muted); }
@@ -71,6 +71,10 @@
 .be-appearance{ padding:10px 14px; border-top:1px solid var(--sep); }
 .be-appearance .row{ display:flex; align-items:center; gap:10px; margin:6px 0; flex-wrap:wrap; }
 .be-appearance .label{ font-size:13px; color:var(--muted); min-width:64px; }
+/* ブロック色スウォッチ(大きめ・押しやすい四角) */
+.bswatch-grid{ display:flex; flex-wrap:wrap; gap:10px; margin-top:6px; }
+.be-bswatch{ width:42px; height:42px; border-radius:10px; border:1px solid var(--sep); cursor:pointer; padding:0; }
+.be-bswatch.sel{ outline:3px solid var(--blue); outline-offset:1px; }
 .be-foot{ display:flex; gap:10px; padding:12px 14px; }
 .be-foot .btn{ flex:1; }
 .btn-arch{ background:#ffece9; color:var(--danger); }
