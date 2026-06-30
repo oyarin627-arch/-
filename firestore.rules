@@ -1,0 +1,39 @@
+rules_version = '2';
+
+// タスク管理アプリ Firestore セキュリティルール
+//
+// 【背景】
+//  最初は「テストモード」で開始したため、30日でアクセスが自動的に拒否される
+//  期限つきルールになっていた。期限が来るとアプリの同期が全停止するため、
+//  恒久ルールへ差し替える必要がある。
+//
+// 【現在の方針：当面の暫定（オープン）】
+//  本アプリは「URLを知る人なら誰でも読み書きできる」共有データ構成のまま運用する。
+//  下のルールは taskapp コレクション(shared / ns-study / board)だけを許可し、
+//  それ以外のパスはすべて拒否する（全公開よりは少し絞った形）。
+//  ※ これは「認証なし＝実質公開」であることに注意。きちんと保護したい場合は
+//    末尾コメントの「Google ログイン版」に切り替える（アプリ側にログイン追加が必要）。
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // アプリが使うドキュメント: taskapp/shared, taskapp/ns-study, taskapp/board
+    match /taskapp/{docId} {
+      allow read, write: if true;
+    }
+
+    // 上記以外はすべて拒否（既定でも拒否だが明示）
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+// 【将来：きちんと保護する場合（Google ログイン版の例）】
+//  アプリ側に Firebase Authentication（Google ログイン）を追加し、
+//  自分の Google アカウント(uid)だけに限定する。<YOUR_UID> を実際のuidに置換。
+//
+//  match /taskapp/{docId} {
+//    allow read, write: if request.auth != null
+//                       && request.auth.uid == "<YOUR_UID>";
+//  }
